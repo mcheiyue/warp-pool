@@ -27,37 +27,42 @@ ensure_dirs() {
 }
 
 # Sanitize wgcf profile for wireproxy (IPv4-focused, MTU, keepalive, endpoint)
+# Portable: no GNU sed append (BusyBox breaks on /a).
 sanitize_wgconf() {
   local conf="$1"
-  local tmp
+  local tmp ipv4 endpoint_line privkey pubkey
   tmp="$(mktemp)"
-  local ipv4
+
   ipv4="$(grep -E '^Address' "$conf" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | head -n1 || true)"
-
-  # drop noisy / dual-stack lines we rewrite
-  grep -v -E '^(Address|AllowedIPs|DNS|MTU|Table|PreUp|PostUp|PreDown|PostDown|PersistentKeepalive)' "$conf" \
-    | grep -v -E '^[Mm][Tt][Uu]' > "$tmp" || true
-
-  if [ -n "$ipv4" ]; then
-    sed -i "/\[Interface\]/a Address = ${ipv4}" "$tmp"
+  privkey="$(grep -E '^PrivateKey' "$conf" | head -n1 | sed 's/^PrivateKey\s*=\s*//')"
+  pubkey="$(grep -E '^PublicKey' "$conf" | head -n1 | sed 's/^PublicKey\s*=\s*//')"
+  endpoint_line="$(grep -E '^Endpoint' "$conf" | head -n1 || true)"
+  if [ -n "$ENDPOINT_IP" ]; then
+    # keep port from original endpoint if present
+    local port
+    port="$(echo "$endpoint_line" | sed -n 's/.*:\([0-9]\+\).*/\1/p')"
+    port="${port:-2408}"
+    endpoint_line="Endpoint = ${ENDPOINT_IP}:${port}"
   fi
-  sed -i "/\[Interface\]/a MTU = ${MTU}" "$tmp"
 
-  if ! grep -q '^\[Peer\]' "$tmp"; then
-    err "no [Peer] in $conf"
+  if [ -z "$ipv4" ] || [ -z "$privkey" ] || [ -z "$pubkey" ] || [ -z "$endpoint_line" ]; then
+    err "sanitize: missing required fields in $conf"
     rm -f "$tmp"
     return 1
   fi
-  sed -i "/\[Peer\]/a AllowedIPs = 0.0.0.0/0" "$tmp"
-  sed -i "/\[Peer\]/a PersistentKeepalive = 15" "$tmp"
 
-  if [ -n "$ENDPOINT_IP" ]; then
-    if grep -q '^Endpoint' "$tmp"; then
-      sed -i "s|^Endpoint.*|Endpoint = ${ENDPOINT_IP}|" "$tmp"
-    else
-      sed -i "/\[Peer\]/a Endpoint = ${ENDPOINT_IP}" "$tmp"
-    fi
-  fi
+  cat > "$tmp" <<EOF
+[Interface]
+PrivateKey = ${privkey}
+Address = ${ipv4}
+MTU = ${MTU}
+
+[Peer]
+PublicKey = ${pubkey}
+Endpoint = $(echo "$endpoint_line" | sed 's/^Endpoint\s*=\s*//')
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 15
+EOF
 
   mv "$tmp" "$conf"
 }
