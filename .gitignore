@@ -1,0 +1,5 @@
+.env
+data/
+*.exe
+warppool
+.DS_Store

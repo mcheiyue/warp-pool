@@ -1,0 +1,44 @@
+services:
+  warp-pool:
+    # Prefer GHCR (CI). Local `build: .` only for dev.
+    image: ${WARP_POOL_IMAGE:-ghcr.io/mcheiyue/warp-pool:latest}
+    build: .
+    container_name: warp-pool
+    restart: unless-stopped
+    # Default: NO cap_add, NO /dev/net/tun (userspace wireproxy).
+    # If Phase 1 smoke fails without them, add:
+    #   cap_add: ["NET_ADMIN"]
+    #   devices: ["/dev/net/tun:/dev/net/tun"]
+    environment:
+      WARP_INSTANCES: "${WARP_INSTANCES:-2}"
+      INSTANCE_PORT_BASE: "${INSTANCE_PORT_BASE:-11000}"
+      AGG_SOCKS_PORT: "${AGG_SOCKS_PORT:-1080}"
+      CONTROL_PORT: "${CONTROL_PORT:-9090}"
+      CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
+      CONTROL_TOKEN: "${CONTROL_TOKEN:-}"
+      HEALTH_INTERVAL: "${HEALTH_INTERVAL:-60}"
+      HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-10}"
+      HEALTH_FAILURES: "${HEALTH_FAILURES:-3}"
+      ROTATE_COOLDOWN: "${ROTATE_COOLDOWN:-300}"
+      REGISTER_STAGGER: "${REGISTER_STAGGER:-5}"
+      REGISTER_JITTER_MAX: "${REGISTER_JITTER_MAX:-8}"
+      PARTIAL_REGISTER_POLICY: "${PARTIAL_REGISTER_POLICY:-degraded}"
+      MTU: "${MTU:-1280}"
+      ENDPOINT_IP: "${ENDPOINT_IP:-}"
+      LICENSE_KEY: "${LICENSE_KEY:-}"
+      GH_PROXY: "${GH_PROXY:-}"
+      ENABLE_AGGREGATE: "${ENABLE_AGGREGATE:-1}"
+      ENABLE_CONTROL: "${ENABLE_CONTROL:-1}"
+      ENABLE_HEALTH: "${ENABLE_HEALTH:-1}"
+      HEALTH_AUTO_ROTATE: "${HEALTH_AUTO_ROTATE:-0}"
+    volumes:
+      - warp-pool-data:/data
+    ports:
+      - "127.0.0.1:1080:1080"
+      - "127.0.0.1:11000-11009:11000-11009"
+      # control stays container-local by default; exec-in or publish explicitly:
+      # - "127.0.0.1:9090:9090"
+    mem_limit: 256m
+
+volumes:
+  warp-pool-data:
