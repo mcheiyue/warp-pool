@@ -64,10 +64,17 @@
 
 ## ADR-010: wireproxy 配置契约与权限下限（审查 B5）
 
-- **Status:** Accepted (2026-08-05)
+- **Status:** Accepted (2026-08-05)；**VPS smoke 确认无 cap 可通**
 - **Context:** wireproxy 需要 WG 段 + Socks5 绑定，不能直接 `-c wgcf-profile.conf`；用户态 netstack 通常不需 tun/NET_ADMIN。
-- **Decision:** 每实例 `wireproxy.conf`：`WGConfig=` 指向 `wgcf-profile.conf` + `[Socks5] BindAddress`。compose **默认不挂 tun、不加 NET_ADMIN**；Phase 1 失败再最小加权并回写本 ADR。
-- **Consequences:** 数据布局多一个 conf 文件；安全基线更紧。
+- **Decision:** 每实例 `wireproxy.conf`：`WGConfig=` + `[Socks5] BindAddress`。compose **默认不挂 tun、不加 NET_ADMIN**。美西 1C2G smoke：N=1/N=2 均无 cap 成功。
+- **Consequences:** 若某内核/环境握手失败，再最小加 cap 并记环境差异；非默认。
+
+## ADR-012: 多实例串行 healthy 启动
+
+- **Status:** Accepted (2026-08-05, smoke)
+- **Context:** 并行拉起多个 wireproxy 时易出现双端握手失败；错峰注册不够。
+- **Decision:** entrypoint 对每个实例：ensure → start → **probe 成功（或超时）** 再进下一个；`BOOT_HEALTH_WAIT` 默认 90s。
+- **Consequences:** 冷启动变慢（N×握手），换稳定。
 
 ## ADR-011: 控制面 v1 = shell/httpd（审查高优）
 

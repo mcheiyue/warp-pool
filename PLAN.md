@@ -356,15 +356,22 @@ Phase 0 只强制：`PLAN.md`、`README.md`、`docs/decisions.md`、`refs/NOTES.
 
 ## 10. 性能预期（1C2G）
 
-> **全部为估，Phase 1 实测前不得当 CI 红线。** MicroWARP ~1MB 是内核 wg+microsocks，**不能**外推 wireproxy。
+> MicroWARP ~1MB 是内核 wg+microsocks，**不能**外推 wireproxy。下列含 2026-08-05 美西 VPS smoke 实测。
 
 | 配置 | 空闲内存 | 状态 | 说明 |
 |------|----------|------|------|
-| N=1 | TBD | 待 Phase 1 测 RSS | 外推基数 |
-| N=2 | ~估 20–40MB | 估 | 功能位对照现网双容器 |
-| N=5 | **上限 120MB**；stretch 80MB | 估 | 推荐默认；lock 前看 N=1×5 余量 |
-| N=10 | ~估 80–150MB | 估 | 观察 FD/限流；可能要砍聚合或改 B2 |
+| N=1 | **~10MB** | 已测 (VPS, no caps) | `docker stats`；重启后 profile 复用、IP 稳定 |
+| N=2 | **~12MB** | 已测 | 串行 healthy 启动；两口 `warp=on`；聚合 :1080 通 |
+| N=5 | **上限 120MB**；stretch 80MB | 外推 ~25–40MB | 按 N=2 线性粗估，远低于上限 |
+| N=10 | 外推 ~40–70MB | 估 | 仍观察 FD/注册限流 |
 | 对照 A N=3 | ~200–300MB | 对照 | 不采用为默认 |
+
+**VPS smoke 要点（2026-08-05）：**
+- 默认 **无 NET_ADMIN / 无 tun** 可通过（wireproxy 用户态）
+- 多实例必须 **等前一实例 healthy 再启下一实例**（已写入 entrypoint）
+- Endpoint 主机名解析为 IP 写入 conf，减少半开隧道 DNS 干扰
+- 两实例出口 IP 可相同（CF 池）；验收主看 backend 口通
+- `POST /rotate` 为同步长操作，客户端超时建议 ≥60s
 
 延迟：本机 SOCKS 可忽略；出口受 CF 与 Endpoint 影响。  
 吞吐：API 代理场景通常足够；瓶颈多在上游业务而非 wireproxy。

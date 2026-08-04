@@ -2,7 +2,9 @@
 
 Single Docker container. Multiple independent Cloudflare WARP exits. Port-direct or in-container scheduling. Rotate one instance without killing the pool.
 
-**Status:** implementing (see [PLAN.md](./PLAN.md)). Image via **GHCR** (GitHub Actions) — do not build on small VPS.
+**Status:** usable MVP (P1–P4). Image: **`ghcr.io/mcheiyue/warp-pool:latest`** (CI). Do not build on small VPS.
+
+Smoke (LA VPS): N=1 ~10MB, N=2 ~12MB, no `NET_ADMIN`/tun; sequential boot; aggregate `:1080` OK.
 
 ## Quick start
 
