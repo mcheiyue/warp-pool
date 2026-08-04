@@ -34,35 +34,54 @@ sanitize_wgconf() {
   tmp="$(mktemp)"
 
   ipv4="$(grep -E '^Address' "$conf" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}' | head -n1 || true)"
-  privkey="$(grep -E '^PrivateKey' "$conf" | head -n1 | sed 's/^PrivateKey\s*=\s*//')"
-  pubkey="$(grep -E '^PublicKey' "$conf" | head -n1 | sed 's/^PublicKey\s*=\s*//')"
-  endpoint_line="$(grep -E '^Endpoint' "$conf" | head -n1 || true)"
+  privkey="$(grep -E '^PrivateKey' "$conf" | head -n1 | sed 's/^PrivateKey[[:space:]]*=[[:space:]]*//')"
+  pubkey="$(grep -E '^PublicKey' "$conf" | head -n1 | sed 's/^PublicKey[[:space:]]*=[[:space:]]*//')"
+  psk="$(grep -E '^PresharedKey' "$conf" | head -n1 | sed 's/^PresharedKey[[:space:]]*=[[:space:]]*//' || true)"
+  endpoint_val="$(grep -E '^Endpoint' "$conf" | head -n1 | sed 's/^Endpoint[[:space:]]*=[[:space:]]*//' || true)"
+  local port="2408"
+  if echo "$endpoint_val" | grep -q ':'; then
+    port="$(echo "$endpoint_val" | sed 's/.*://')"
+  fi
   if [ -n "$ENDPOINT_IP" ]; then
-    # keep port from original endpoint if present
-    local port
-    port="$(echo "$endpoint_line" | sed -n 's/.*:\([0-9]\+\).*/\1/p')"
-    port="${port:-2408}"
-    endpoint_line="Endpoint = ${ENDPOINT_IP}:${port}"
+    endpoint_val="${ENDPOINT_IP}:${port}"
+  else
+    # Resolve hostname once so multi-instance does not thrash DNS through half-up tunnels
+    local host
+    host="$(echo "$endpoint_val" | sed 's/:.*//')"
+    if echo "$host" | grep -Eq '^[A-Za-z]'; then
+      local resolved
+      resolved="$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+      if [ -z "$resolved" ]; then
+        resolved="$(nslookup "$host" 2>/dev/null | awk '/^Address: / && $2 !~ /#/ {print $2; exit}' || true)"
+      fi
+      if [ -n "$resolved" ]; then
+        endpoint_val="${resolved}:${port}"
+        log "resolved Endpoint ${host} -> ${endpoint_val}"
+      fi
+    fi
   fi
 
-  if [ -z "$ipv4" ] || [ -z "$privkey" ] || [ -z "$pubkey" ] || [ -z "$endpoint_line" ]; then
+  if [ -z "$ipv4" ] || [ -z "$privkey" ] || [ -z "$pubkey" ] || [ -z "$endpoint_val" ]; then
     err "sanitize: missing required fields in $conf"
     rm -f "$tmp"
     return 1
   fi
 
-  cat > "$tmp" <<EOF
-[Interface]
-PrivateKey = ${privkey}
-Address = ${ipv4}
-MTU = ${MTU}
-
-[Peer]
-PublicKey = ${pubkey}
-Endpoint = $(echo "$endpoint_line" | sed 's/^Endpoint\s*=\s*//')
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 15
-EOF
+  {
+    echo "[Interface]"
+    echo "PrivateKey = ${privkey}"
+    echo "Address = ${ipv4}"
+    echo "MTU = ${MTU}"
+    echo
+    echo "[Peer]"
+    echo "PublicKey = ${pubkey}"
+    if [ -n "$psk" ]; then
+      echo "PresharedKey = ${psk}"
+    fi
+    echo "Endpoint = ${endpoint_val}"
+    echo "AllowedIPs = 0.0.0.0/0"
+    echo "PersistentKeepalive = 15"
+  } > "$tmp"
 
   mv "$tmp" "$conf"
 }

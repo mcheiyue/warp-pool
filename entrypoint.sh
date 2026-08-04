@@ -55,23 +55,40 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 started=0
+BOOT_WAIT="${BOOT_HEALTH_WAIT:-90}"
 for ((id = 0; id < WARP_INSTANCES; id++)); do
-  # stagger: i * STAGGER + rand(0..JITTER)
-  if [ "$id" -gt 0 ] || [ ! -f "$(instance_dir 0)/wgcf-profile.conf" ]; then
+  # stagger before register (CF rate limit); extra wait after prior healthy
+  if [ "$id" -gt 0 ]; then
     jitter=0
     if [ "${REGISTER_JITTER_MAX}" -gt 0 ] 2>/dev/null; then
       jitter=$((RANDOM % (REGISTER_JITTER_MAX + 1)))
     fi
-    delay=$((id * REGISTER_STAGGER + jitter))
-    if [ "$delay" -gt 0 ]; then
-      log "instance ${id}: stagger sleep ${delay}s"
-      sleep "$delay"
-    fi
+    delay=$((REGISTER_STAGGER + jitter))
+    log "instance ${id}: stagger sleep ${delay}s"
+    sleep "$delay"
   fi
 
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
-    started=$((started + 1))
-    WP_PIDS+=("$(cat "${PID_DIR}/wireproxy-${id}.pid")")
+    # sequential: wait until this instance handshakes before starting the next
+    ready=0
+    for ((t = 0; t < BOOT_WAIT; t += 3)); do
+      if ip="$(probe_instance "$id")"; then
+        write_meta "$id" true "$ip" 0 "" "$(cat "${PID_DIR}/wireproxy-${id}.pid" 2>/dev/null || true)"
+        log "instance ${id}: ready ip=${ip}"
+        ready=1
+        break
+      fi
+      sleep 3
+    done
+    if [ "$ready" = "1" ]; then
+      started=$((started + 1))
+      WP_PIDS+=("$(cat "${PID_DIR}/wireproxy-${id}.pid")")
+    else
+      err "instance ${id}: started but not healthy within ${BOOT_WAIT}s"
+      if [ "$PARTIAL_REGISTER_POLICY" = "fail" ]; then
+        exit 1
+      fi
+    fi
   else
     err "instance ${id}: failed to start"
     if [ "$PARTIAL_REGISTER_POLICY" = "fail" ]; then
@@ -87,7 +104,7 @@ fi
 
 log "started ${started}/${WARP_INSTANCES} instances"
 
-# initial health → healthy.json
+# refresh healthy.json from current meta/probes
 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
 if [ "$ENABLE_HEALTH" = "1" ]; then

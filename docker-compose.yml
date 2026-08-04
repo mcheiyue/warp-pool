@@ -5,8 +5,8 @@ services:
     build: .
     container_name: warp-pool
     restart: unless-stopped
-    # Default: NO cap_add, NO /dev/net/tun (userspace wireproxy).
-    # If Phase 1 smoke fails without them, add:
+    # Default: NO cap_add / tun (wireproxy userspace). VPS smoke: no caps OK for N=1.
+    # Uncomment only if your host needs them:
     #   cap_add: ["NET_ADMIN"]
     #   devices: ["/dev/net/tun:/dev/net/tun"]
     environment:
