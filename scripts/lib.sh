@@ -4,6 +4,10 @@ set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-/data}"
 INSTANCE_PORT_BASE="${INSTANCE_PORT_BASE:-40000}"
+# warp-cli proxy always binds 127.0.0.1:{INSTANCE_PORT_BASE+id}
+# host-reachable ports: 0.0.0.0:{EXPOSE_PORT_BASE+id} via warppool expose
+EXPOSE_PORT_BASE="${EXPOSE_PORT_BASE:-11000}"
+ENABLE_EXPOSE="${ENABLE_EXPOSE:-1}"
 SCRIPTS_DIR="${SCRIPTS_DIR:-/opt/warp-pool/scripts}"
 PID_DIR="${PID_DIR:-/run/warp-pool}"
 WARP_CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-45}"
@@ -37,12 +41,21 @@ instance_port() {
   echo $((INSTANCE_PORT_BASE + id))
 }
 
+expose_port() {
+  local id="$1"
+  echo $((EXPOSE_PORT_BASE + id))
+}
+
 pidfile_svc() {
   echo "${PID_DIR}/warp-svc-${1}.pid"
 }
 
 pidfile_dbus() {
   echo "${PID_DIR}/dbus-${1}.pid"
+}
+
+pidfile_expose() {
+  echo "${PID_DIR}/expose-${1}.pid"
 }
 
 ensure_dirs() {
@@ -87,7 +100,7 @@ write_meta() {
   mv "${meta}.tmp" "$meta"
 }
 
-# Probe SOCKS on instance proxy port; print ip= on success
+# Probe SOCKS on instance proxy port; print ip= on success (may be IPv6)
 probe_instance() {
   local id="$1"
   local port out ip warp
@@ -99,6 +112,23 @@ probe_instance() {
   ip="$(echo "$out" | awk -F= '/^ip=/{print $2}')"
   if echo "${warp:-}" | grep -qE '^(on|plus)$'; then
     echo "${ip:-unknown}"
+    return 0
+  fi
+  return 1
+}
+
+# Force IPv4 egress check (1.1.1.1); print IPv4 or fail
+probe_instance_v4() {
+  local id="$1"
+  local port out ip warp
+  port="$(instance_port "$id")"
+  out="$(curl -4 -sS --max-time "${HEALTH_TIMEOUT}" \
+    --socks5-hostname "127.0.0.1:${port}" \
+    "https://1.1.1.1/cdn-cgi/trace" 2>/dev/null || true)"
+  warp="$(echo "$out" | awk -F= '/^warp=/{print $2}')"
+  ip="$(echo "$out" | awk -F= '/^ip=/{print $2}')"
+  if echo "${warp:-}" | grep -qE '^(on|plus)$' && echo "${ip:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    echo "$ip"
     return 0
   fi
   return 1

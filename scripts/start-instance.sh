@@ -75,9 +75,26 @@ if [ ! -f "${state}/reg.json" ]; then
   fi
 fi
 
-wcli "$id" mode proxy
+  wcli "$id" mode proxy
 wcli "$id" proxy port "$port"
 wcli "$id" connect
 wcli "$id" debug qlog disable 2>/dev/null || true
 
-log "instance ${id}: proxy requested on 127.0.0.1:${port} pid=$(cat "$pf_svc")"
+# CF proxy is 127.0.0.1-only; relay to 0.0.0.0 for Docker port-publish / host direct
+if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
+  exp="$(expose_port "$id")"
+  pf_exp="$(pidfile_expose "$id")"
+  if [ -f "$pf_exp" ]; then
+    old_exp="$(cat "$pf_exp" || true)"
+    if [ -n "$old_exp" ] && kill -0 "$old_exp" 2>/dev/null; then
+      kill "$old_exp" 2>/dev/null || true
+      sleep 1
+    fi
+    rm -f "$pf_exp"
+  fi
+  log "instance ${id}: expose 0.0.0.0:${exp} -> 127.0.0.1:${port}"
+  warppool expose --listen "0.0.0.0:${exp}" --backend "127.0.0.1:${port}" &
+  echo $! > "$pf_exp"
+fi
+
+log "instance ${id}: proxy on 127.0.0.1:${port} expose=$(expose_port "$id") pid=$(cat "$pf_svc")"

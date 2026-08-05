@@ -6,6 +6,17 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 id="${1:?usage: stop-instance.sh <id>}"
 pf_svc="$(pidfile_svc "$id")"
 pf_dbus="$(pidfile_dbus "$id")"
+pf_exp="$(pidfile_expose "$id")"
+
+if [ -f "$pf_exp" ]; then
+  epid="$(cat "$pf_exp" || true)"
+  if [ -n "$epid" ]; then
+    log "instance ${id}: stop expose pid=${epid}"
+    kill "$epid" 2>/dev/null || true
+    kill -9 "$epid" 2>/dev/null || true
+  fi
+  rm -f "$pf_exp"
+fi
 
 if [ -f "$pf_svc" ]; then
   pid="$(cat "$pf_svc" || true)"

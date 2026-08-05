@@ -29,14 +29,64 @@ func main() {
 		runAggregate(os.Args[2:])
 	case "control":
 		runControl(os.Args[2:])
+	case "expose":
+		// TCP relay: warp-cli proxy only binds 127.0.0.1; publish via 0.0.0.0
+		runExpose(os.Args[2:])
 	default:
 		fatalUsage()
 	}
 }
 
 func fatalUsage() {
-	fmt.Fprintf(os.Stderr, "usage:\n  warppool aggregate --listen :1080 --healthy /data/state/healthy.json\n  warppool control --listen 127.0.0.1:9090 --data /data --scripts /opt/warp-pool/scripts\n")
+	fmt.Fprintf(os.Stderr, "usage:\n  warppool aggregate --listen :1080 --healthy /data/state/healthy.json\n  warppool control --listen 127.0.0.1:9090 --data /data --scripts /opt/warp-pool/scripts\n  warppool expose --listen 0.0.0.0:11000 --backend 127.0.0.1:40000\n")
 	os.Exit(2)
+}
+
+// runExpose is a dumb TCP proxy so host-published ports can reach warp's loopback SOCKS.
+func runExpose(args []string) {
+	listen := ""
+	backend := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--listen":
+			i++
+			if i < len(args) {
+				listen = args[i]
+			}
+		case "--backend":
+			i++
+			if i < len(args) {
+				backend = args[i]
+			}
+		}
+	}
+	if listen == "" || backend == "" {
+		fatalUsage()
+	}
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		log.Fatalf("expose listen %s: %v", listen, err)
+	}
+	log.Printf("expose %s -> %s", listen, backend)
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			log.Printf("expose accept: %v", err)
+			continue
+		}
+		go func(client net.Conn) {
+			defer client.Close()
+			up, err := net.DialTimeout("tcp", backend, 10*time.Second)
+			if err != nil {
+				return
+			}
+			defer up.Close()
+			errc := make(chan struct{}, 2)
+			go func() { _, _ = io.Copy(up, client); errc <- struct{}{} }()
+			go func() { _, _ = io.Copy(client, up); errc <- struct{}{} }()
+			<-errc
+		}(c)
+	}
 }
 
 type healthyFile struct {

@@ -8,6 +8,8 @@ services:
     environment:
       WARP_INSTANCES: "${WARP_INSTANCES:-2}"
       INSTANCE_PORT_BASE: "${INSTANCE_PORT_BASE:-40000}"
+      EXPOSE_PORT_BASE: "${EXPOSE_PORT_BASE:-11000}"
+      ENABLE_EXPOSE: "${ENABLE_EXPOSE:-1}"
       AGG_SOCKS_PORT: "${AGG_SOCKS_PORT:-1080}"
       CONTROL_PORT: "${CONTROL_PORT:-9090}"
       CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
@@ -32,7 +34,8 @@ services:
       - warp-pool-data:/data
     ports:
       - "127.0.0.1:1080:1080"
-      - "127.0.0.1:40000-40009:40000-40009"
+      # host-direct per instance (warppool expose -> warp 127.0.0.1:4000x)
+      - "127.0.0.1:11000-11009:11000-11009"
       # control stays container-local; exec-in or publish with token:
       # - "127.0.0.1:9090:9090"
     mem_limit: 512m
