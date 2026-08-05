@@ -17,12 +17,18 @@ rotate_one() {
     return 1
   fi
   meta="${dir}/meta.json"
-  if [ "$MODE" = "soft" ] && [ -f "$meta" ]; then
+  if [ "$MODE" = "soft" ] && [ -f "$meta" ] && [ "${COOLDOWN}" -gt 0 ] 2>/dev/null; then
     last="$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)"
     if [ -n "$last" ]; then
       now="$(date -u +%s)"
-      # busybox date may not parse ISO; store epoch in side file if needed
+      last_epoch=""
       if last_epoch="$(date -u -d "$last" +%s 2>/dev/null || true)" && [ -n "$last_epoch" ]; then
+        :
+      else
+        # alpine/busybox fallback: strip to epoch if stored as unix, else skip cooldown parse
+        last_epoch=""
+      fi
+      if [ -n "$last_epoch" ]; then
         delta=$((now - last_epoch))
         if [ "$delta" -lt "$COOLDOWN" ]; then
           err "instance ${id}: cooldown (${delta}s < ${COOLDOWN}s)"

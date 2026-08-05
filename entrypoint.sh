@@ -73,7 +73,13 @@ for ((id = 0; id < WARP_INSTANCES; id++)); do
     ready=0
     for ((t = 0; t < BOOT_WAIT; t += 3)); do
       if ip="$(probe_instance "$id")"; then
+        # do not stamp last_rotate on boot — that falsely trips ROTATE_COOLDOWN
         write_meta "$id" true "$ip" 0 "" "$(cat "${PID_DIR}/wireproxy-${id}.pid" 2>/dev/null || true)"
+        # clear last_rotate if write_meta preserved an old one only when empty arg — force empty file field
+        meta="$(instance_dir "$id")/meta.json"
+        if [ -f "$meta" ]; then
+          jq 'del(.last_rotate) | . + {last_rotate:""}' "$meta" > "${meta}.tmp" && mv "${meta}.tmp" "$meta"
+        fi
         log "instance ${id}: ready ip=${ip}"
         ready=1
         break
