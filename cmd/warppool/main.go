@@ -355,7 +355,7 @@ func runControl(args []string) {
 		q := r.URL.Query()
 		mode := q.Get("mode")
 		if mode == "" {
-			mode = "soft"
+			mode = "reconnect" // v0.2 default; soft is alias in rotate-instance.sh
 		}
 		script := filepath.Join(scripts, "rotate-instance.sh")
 		var cmd *exec.Cmd

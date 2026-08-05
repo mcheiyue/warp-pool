@@ -2,7 +2,7 @@ name: docker-publish
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, v0.2-official]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -50,5 +50,4 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            WGCF_VERSION=2.2.32
-            WIREPROXY_VERSION=1.1.3
+            COMMIT_SHA=${{ github.sha }}

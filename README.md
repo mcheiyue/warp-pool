@@ -1,64 +1,66 @@
 # warp-pool
 
-Single Docker container. Multiple independent Cloudflare WARP exits. Port-direct or in-container scheduling. Rotate one instance without killing the pool.
+Single Docker container. Multiple independent **official** Cloudflare WARP exits (`warp-svc` proxy mode). Port-direct or in-container SOCKS RR. Rotate one instance without killing the pool.
 
-**Status:** usable MVP (P1–P4). Image: **`ghcr.io/mcheiyue/warp-pool:latest`** (CI). Do not build on small VPS.
+**v0.2 (primary):** official client × N + `warppool` aggregate/control.  
+**v0.1 B1:** wgcf+wireproxy — deprecated (does not rotate egress IP on tested hosts).
 
-Smoke (LA VPS): N=1 ~10MB, N=2 ~12MB, no `NET_ADMIN`/tun; sequential boot; aggregate `:1080` OK.
+Image: **`ghcr.io/mcheiyue/warp-pool:latest`** (GitHub Actions → GHCR).
 
 ## Quick start
 
 ```bash
-# after CI publishes
 docker pull ghcr.io/mcheiyue/warp-pool:latest
 
 docker run -d --name warp-pool --restart unless-stopped \
   -e WARP_INSTANCES=2 \
   -v warp-pool-data:/data \
   -p 127.0.0.1:1080:1080 \
-  -p 127.0.0.1:11000-11001:11000-11001 \
+  -p 127.0.0.1:40000-40001:40000-40001 \
   ghcr.io/mcheiyue/warp-pool:latest
 ```
 
-Or: copy `.env.example` → `.env`, then `docker compose up -d` (compose builds locally only if you insist; prefer prebuilt image).
-
-```yaml
-# override image in compose:
-# image: ghcr.io/mcheiyue/warp-pool:latest
-```
+Or: copy `.env.example` → `.env`, `docker compose up -d`.
 
 ### Smoke
 
 ```bash
-curl -x socks5h://127.0.0.1:11000 https://cloudflare.com/cdn-cgi/trace
-curl -x socks5h://127.0.0.1:1080  https://cloudflare.com/cdn-cgi/trace
+curl --socks5-hostname 127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace
+curl --socks5-hostname 127.0.0.1:1080  https://cloudflare.com/cdn-cgi/trace
 docker exec warp-pool curl -s http://127.0.0.1:9090/instances
+# reconnect rotate (default):
 docker exec warp-pool curl -s -X POST 'http://127.0.0.1:9090/rotate?id=0'
+# hard re-register:
+docker exec warp-pool curl -s -X POST 'http://127.0.0.1:9090/rotate?id=0&mode=hard'
 ```
 
 ### Notes
 
-- **No `NET_ADMIN` / tun by default** (wireproxy userspace). Add only if smoke fails.
-- Control API defaults to `127.0.0.1:9090` inside the container. Non-loopback bind requires `CONTROL_TOKEN`.
-- Memory target: N=5 formal cap ≤120MB (stretch 80MB); measure after run.
-- Soft rotate re-registers one instance; not a guarantee of a “clean” CF exit IP.
+- **No `NET_ADMIN` / tun by default** (WARP **proxy** mode). UDP not available in proxy mode.
+- Control API defaults to `127.0.0.1:9090` inside the container.
+- Memory: roughly **~110MiB × N** + small aggregate; N=2 often **~220–270MiB**. Not a tiny wgcf pool.
+- Egress may be **IPv6**; rotate does not guarantee a “clean” or smarter IP — only a different/session refresh attempt.
+- `DEREGISTER_ON_SHUTDOWN=1` (default) deletes registrations on stop to limit device-slot leak.
 
 ## Stack
 
-`wgcf` + `wireproxy` × N + `warppool aggregate` (SOCKS RR) + health loop + control API.
-
-Pinned: wgcf **2.2.32**, wireproxy **1.1.3**.
+`cloudflare-warp` (`warp-svc` × N, isolated `STATE_DIRECTORY` / `RUNTIME_DIRECTORY` / dbus)  
++ `warppool aggregate` (SOCKS RR) + health loop + control API.
 
 ## Docs
 
-- [PLAN.md](./PLAN.md) — full plan, phases, acceptance
-- [docs/decisions.md](./docs/decisions.md) — ADRs
-- [refs/NOTES.md](./refs/NOTES.md) — upstream survey
+- [docs/STATUS.md](./docs/STATUS.md) — current track  
+- [docs/probe-official.md](./docs/probe-official.md) — VPS probe numbers  
+- [docs/pivot-v0.2.md](./docs/pivot-v0.2.md) — reshape  
+- [docs/decisions.md](./docs/decisions.md) — ADRs  
+- [PLAN.md](./PLAN.md) — original B1 plan (historical)  
+- [.omo/plans/v0.2-official-pivot.md](./.omo/plans/v0.2-official-pivot.md) — v0.2 execution plan  
 
-## Not in scope (v1)
+## Not in scope
 
-Clash subscription factories, WARP+ traffic bots, heavy Web UI, coupling to any single downstream app.
+Clash subscription factories, WARP+ traffic bots, heavy Web UI, coupling to any single downstream app.  
+No vendoring of CC-BY-NC third-party multi-WARP scripts.
 
 ## License
 
-MIT for original code. Third-party binaries (wgcf, wireproxy) keep their own licenses.
+MIT for original code. `cloudflare-warp` package is subject to Cloudflare’s terms.

@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
-
 INTERVAL="${HEALTH_INTERVAL:-60}"
-log "health-loop interval=${INTERVAL}s"
-# initial pass
-bash "${SCRIPTS_DIR}/health-once.sh" || true
+SCRIPTS_DIR="${SCRIPTS_DIR:-/opt/warp-pool/scripts}"
 while true; do
-  sleep "$INTERVAL"
   bash "${SCRIPTS_DIR}/health-once.sh" || true
+  sleep "$INTERVAL"
 done

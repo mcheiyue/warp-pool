@@ -1,17 +1,13 @@
 services:
   warp-pool:
-    # Prefer GHCR (CI). Local `build: .` only for dev.
     image: ${WARP_POOL_IMAGE:-ghcr.io/mcheiyue/warp-pool:latest}
     build: .
     container_name: warp-pool
     restart: unless-stopped
-    # Default: NO cap_add / tun (wireproxy userspace). VPS smoke: no caps OK for N=1.
-    # Uncomment only if your host needs them:
-    #   cap_add: ["NET_ADMIN"]
-    #   devices: ["/dev/net/tun:/dev/net/tun"]
+    # v0.2 proxy mode: no NET_ADMIN / tun by default
     environment:
       WARP_INSTANCES: "${WARP_INSTANCES:-2}"
-      INSTANCE_PORT_BASE: "${INSTANCE_PORT_BASE:-11000}"
+      INSTANCE_PORT_BASE: "${INSTANCE_PORT_BASE:-40000}"
       AGG_SOCKS_PORT: "${AGG_SOCKS_PORT:-1080}"
       CONTROL_PORT: "${CONTROL_PORT:-9090}"
       CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
@@ -20,13 +16,14 @@ services:
       HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-10}"
       HEALTH_FAILURES: "${HEALTH_FAILURES:-3}"
       ROTATE_COOLDOWN: "${ROTATE_COOLDOWN:-300}"
+      ROTATE_MODE: "${ROTATE_MODE:-reconnect}"
       REGISTER_STAGGER: "${REGISTER_STAGGER:-5}"
       REGISTER_JITTER_MAX: "${REGISTER_JITTER_MAX:-8}"
       PARTIAL_REGISTER_POLICY: "${PARTIAL_REGISTER_POLICY:-degraded}"
-      MTU: "${MTU:-1280}"
-      ENDPOINT_IP: "${ENDPOINT_IP:-}"
-      LICENSE_KEY: "${LICENSE_KEY:-}"
-      GH_PROXY: "${GH_PROXY:-}"
+      WARP_CONNECT_TIMEOUT: "${WARP_CONNECT_TIMEOUT:-45}"
+      BOOT_HEALTH_WAIT: "${BOOT_HEALTH_WAIT:-90}"
+      DEREGISTER_ON_SHUTDOWN: "${DEREGISTER_ON_SHUTDOWN:-1}"
+      WARP_LICENSE_KEY: "${WARP_LICENSE_KEY:-}"
       ENABLE_AGGREGATE: "${ENABLE_AGGREGATE:-1}"
       ENABLE_CONTROL: "${ENABLE_CONTROL:-1}"
       ENABLE_HEALTH: "${ENABLE_HEALTH:-1}"
@@ -35,10 +32,10 @@ services:
       - warp-pool-data:/data
     ports:
       - "127.0.0.1:1080:1080"
-      - "127.0.0.1:11000-11009:11000-11009"
-      # control stays container-local by default; exec-in or publish explicitly:
+      - "127.0.0.1:40000-40009:40000-40009"
+      # control stays container-local; exec-in or publish with token:
       # - "127.0.0.1:9090:9090"
-    mem_limit: 256m
+    mem_limit: 512m
 
 volumes:
   warp-pool-data:

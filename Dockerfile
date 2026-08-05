@@ -1,62 +1,72 @@
 # syntax=docker/dockerfile:1
+# v0.2: official cloudflare-warp (proxy mode) × N + warppool aggregate/control
 
 ARG GO_VERSION=1.22
-ARG ALPINE_VERSION=3.20
-ARG WGCF_VERSION=2.2.32
-ARG WIREPROXY_VERSION=1.1.3
+ARG DEBIAN_VERSION=bookworm-slim
 
-FROM golang:${GO_VERSION}-alpine AS warppool-build
+FROM golang:${GO_VERSION}-bookworm AS warppool-build
 WORKDIR /src
 COPY cmd/warppool/go.mod ./
 COPY cmd/warppool/*.go ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /warppool .
 
-FROM alpine:${ALPINE_VERSION}
+FROM debian:${DEBIAN_VERSION}
 
-ARG WGCF_VERSION
-ARG WIREPROXY_VERSION
+ARG TARGETPLATFORM
 ARG TARGETARCH
+ARG COMMIT_SHA=
 
-RUN apk add --no-cache bash curl ca-certificates jq coreutils \
-  && update-ca-certificates
-
-# arch map: docker TARGETARCH is amd64/arm64
-RUN set -eux; \
-  case "${TARGETARCH}" in \
-    amd64) WP_ARCH=amd64; WG_ARCH=amd64 ;; \
-    arm64) WP_ARCH=arm64; WG_ARCH=arm64 ;; \
-    arm)   WP_ARCH=arm;   WG_ARCH=armv7 ;; \
-    *) echo "unsupported arch: ${TARGETARCH}"; exit 1 ;; \
-  esac; \
-  WGCF_URL="https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_${WG_ARCH}"; \
-  if [ -n "${GH_PROXY:-}" ]; then WGCF_URL="${GH_PROXY%/}/${WGCF_URL}"; fi; \
-  curl -fsSL -o /usr/local/bin/wgcf "${WGCF_URL}"; \
-  chmod +x /usr/local/bin/wgcf; \
-  WP_URL="https://github.com/pufferffish/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_${WP_ARCH}.tar.gz"; \
-  if [ -n "${GH_PROXY:-}" ]; then WP_URL="${GH_PROXY%/}/${WP_URL}"; fi; \
-  curl -fsSL -o /tmp/wireproxy.tar.gz "${WP_URL}"; \
-  tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin; \
-  chmod +x /usr/local/bin/wireproxy; \
-  rm -f /tmp/wireproxy.tar.gz; \
-  wgcf --version || true; \
-  wireproxy --version || true
+LABEL org.opencontainers.image.title="warp-pool" \
+      org.opencontainers.image.description="Multi official WARP proxy pool (warp-svc × N + warppool)" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/mcheiyue/warp-pool" \
+      org.opencontainers.image.revision="${COMMIT_SHA}"
 
 COPY --from=warppool-build /warppool /usr/local/bin/warppool
 COPY scripts/ /opt/warp-pool/scripts/
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /opt/warp-pool/scripts/*.sh /usr/local/bin/warppool
+
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg lsb-release sudo jq dbus; \
+  curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+    | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg; \
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/cloudflare-client.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends cloudflare-warp; \
+  apt-get clean; \
+  rm -rf /var/lib/apt/lists/*; \
+  chmod +x /entrypoint.sh /usr/local/bin/warppool /opt/warp-pool/scripts/*.sh; \
+  useradd -m -s /bin/bash warp; \
+  echo "warp ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/warp; \
+  mkdir -p /home/warp/.local/share/warp; \
+  echo -n yes > /home/warp/.local/share/warp/accepted-tos.txt; \
+  chown -R warp:warp /home/warp
+
+USER warp
 
 ENV DATA_DIR=/data \
-    WARP_INSTANCES=1 \
-    INSTANCE_PORT_BASE=11000 \
+    WARP_INSTANCES=2 \
+    INSTANCE_PORT_BASE=40000 \
     AGG_SOCKS_PORT=1080 \
     CONTROL_PORT=9090 \
     CONTROL_BIND=127.0.0.1 \
-    WGCF_VERSION=${WGCF_VERSION} \
-    WIREPROXY_VERSION=${WIREPROXY_VERSION}
+    WARP_CONNECT_TIMEOUT=45 \
+    BOOT_HEALTH_WAIT=90 \
+    REGISTER_STAGGER=5 \
+    REGISTER_JITTER_MAX=8 \
+    PARTIAL_REGISTER_POLICY=degraded \
+    ROTATE_MODE=reconnect \
+    DEREGISTER_ON_SHUTDOWN=1 \
+    ENABLE_AGGREGATE=1 \
+    ENABLE_CONTROL=1 \
+    ENABLE_HEALTH=1 \
+    HEALTH_AUTO_ROTATE=0
 
 VOLUME ["/data"]
-EXPOSE 1080 11000 9090
+EXPOSE 1080 40000 9090
 
-# Default: no NET_ADMIN, no /dev/net/tun (wireproxy userspace)
+# Default: no NET_ADMIN / no tun (WARP proxy mode)
 ENTRYPOINT ["/entrypoint.sh"]

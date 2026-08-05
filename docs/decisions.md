@@ -2,10 +2,11 @@
 
 ## ADR-001: 走路线 B（wgcf 轻量），不走官方 multi warp-svc
 
-- **Status:** Accepted (2026-08-05)
+- **Status:** **Superseded** (2026-08-05) → 见 **ADR-013**
 - **Context:** 目标机常见 1C2G；现网 `caomingjun/warp` 单实例已 ~96MB。Ercin 多实例成熟但 50–100MB/实例。
-- **Decision:** 主路径用 wgcf 注册 + 轻量转发；官方 multi 仅作形态参考。
-- **Consequences:** 需自研多实例编排；换 IP 语义更可控；内存目标按 wireproxy 实测，不照搬 MicroWARP ~1MB。
+- **Decision（原）:** 主路径用 wgcf 注册 + 轻量转发；官方 multi 仅作形态参考。
+- **Why superseded:** VPS 上 B1 MVP soft re-register **换 IP 成功率 0%**（换号不换出口）；官方 multi 探针 N=2 IP 互异 + registration rotate 可换 IP。轻量不再满足核心需求「可切出口」。
+- **Consequences:** B1 代码可留作历史/对照分支；主路径改官方 `warp-svc` proxy multi。
 
 ## ADR-002: v1 隔离用 wireproxy 多进程（B1），不用 netns（B2）
 
@@ -78,7 +79,27 @@
 
 ## ADR-011: 控制面 v1 = shell/httpd（审查高优）
 
-- **Status:** Accepted (2026-08-05)
+- **Status:** Accepted (2026-08-05)；实现上已用 **warppool control（Go）**，契约不变
 - **Context:** socat/shell/Go/python 四选一拖到 Phase 4 会摇摆。
-- **Decision:** v1 用 busybox httpd + shell（或 nc 路由）；与 health 同运维模型。证明不够再上静态 tiny Go。
-- **Consequences:** 依赖少；API 表面保持 PLAN §6 JSON 契约。
+- **Decision:** 控制 API 与聚合同进程族（Go 静态二进制可接受）；JSON 契约保持。
+- **Consequences:** 依赖少；不因实现语言再开 ADR。
+
+## ADR-013: 主路径改为官方 warp-svc proxy multi（2026-08-05 探针后）
+
+- **Status:** Accepted
+- **Context:** 见 [probe-official.md](./probe-official.md)。用户核心需求是**可切 IP / 多出口**，不是极致内存。B1 内存优但出口锁死；官方 N=2 ~265MB、IP 互异、rotate 有效。
+- **Decision:**
+  1. **隧道层：** N × 官方 `warp-svc`，`mode proxy` + 每实例独立 `STATE_DIRECTORY` / `RUNTIME_DIRECTORY` / dbus（行为对齐 Ercin，**代码自写 MIT**）。
+  2. **聚合/控制：** 保留现有 `warppool aggregate|control` + healthy.json + cooldown；**不**默认上 go-gost（探针中 gost 单进程 ~47MB）。
+  3. **rotate 阶梯：** 默认 `disconnect`+`connect`（chen 探针已变 IP）→ 失败再 `registration delete`+`new`（Ercin 探针已变 IP）→ 最后才动整容器。
+  4. **默认 N=2**；N≥5 仅文档上限，1C2G 不作为默认验收。
+  5. **权限：** proxy multi 目标无 `NET_ADMIN`/tun；与 caomingjun 默认 tunnel 模式区分。
+- **Consequences:** Dockerfile 改装 `cloudflare-warp`；废弃 wgcf/wireproxy 主路径；内存叙事改为「~110MB × N + 聚合」；IPv6 出口需业务侧知晓。
+
+## ADR-014: warp-pool v0.2 结构调整（保留壳、换芯）
+
+- **Status:** Accepted
+- **Keep:** 端口矩阵、healthy 语义、RR 聚合、control API、监督模型、GHCR CI、通用无业务名。
+- **Replace:** `scripts/ensure|start` 的 wgcf/wireproxy → `start-warp-instance` 风格官方启动；rotate 调 `warp-cli`；health 探 `40000+i` 或 `11000+i` 上 `warp=on`。
+- **Drop from default image:** wgcf、wireproxy 二进制（可另 tag `legacy-b1` 若仍要对照）。
+- **Optional later:** 编排模式（A：多 caomingjun 容器 + 仅 warppool 控制面）作为 `deploy/compose-sidecar` 示例，主产品仍是单镜像 B。

@@ -1,8 +1,9 @@
 # warp-pool 规划书
 
+> **历史文档（v0.1 B1）。现行主路径见 [docs/STATUS.md](./docs/STATUS.md)、[docs/pivot-v0.2.md](./docs/pivot-v0.2.md)、[`.omo/plans/v0.2-official-pivot.md`](./.omo/plans/v0.2-official-pivot.md)。**
+>
 > 单容器 · 多 WARP 独立出口 · 可切 IP · 端口直连 / 容器内调度  
-> 路线：**B（wgcf 轻量多实例）**  
-> 状态：规划定稿（Oracle 审查 revise 已回写），尚未编码  
+> 路线（原文）：**B（wgcf 轻量多实例）** — **已由 ADR-013 废止为 primary**  
 > 日期：2026-08-05  
 > 仓库路径：`D:\Github\warp-pool`
 

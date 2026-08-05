@@ -40,11 +40,11 @@
 
 | 来源 | 采纳 |
 |------|------|
-| Ercin | 端口矩阵、GOST RR、错峰注册、healthy 集合、失败摘除 |
-| MicroWARP | conf 清洗、MTU/Endpoint、持久化避免乱注册、轻量 SOCKS 思路 |
-| warproxy | wgcf+wireproxy 组合 |
-| WarpNest / 思路.md | 多独立 IP + 每口代理的产品直觉；实现改 B1 |
-| 现网 | 1C2G 预算；rotate 优于整容器 restart |
+| Ercin | 端口矩阵、错峰注册、healthy 集合、失败摘除、**STATE/RUNTIME 隔离 multi**（v0.2）；聚合改用自有 warppool 不默认 gost |
+| MicroWARP / warproxy | 曾支撑 B1；**换 IP 证伪后降为 legacy** |
+| WarpNest / 思路.md | 多独立 IP 产品直觉 |
+| 现网 caomingjun | reconnect/restart 可换 IP；单实例 ~80–110MB |
+| 2026-08-05 探针 | 见 `docs/probe-official.md`：官方 N=2 ~265MB、IP 互异、rotate 有效 |
 
 ## 关键实现细节备忘
 
