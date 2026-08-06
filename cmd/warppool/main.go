@@ -479,13 +479,9 @@ func runControl(args []string) {
 		writeJSON(w, map[string]any{"ok": true, "output": string(out)})
 	})
 
-	// single-page UI (and bare / → same page)
+	// single-page UI — no auth needed (static HTML; API calls handle auth via token param)
 	indexPath := filepath.Join(webRoot, "index.html")
 	serveUI := func(w http.ResponseWriter, r *http.Request) {
-		if !authOK(r, token) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		http.ServeFile(w, r, indexPath)
 	}
 	mux.HandleFunc("/ui", serveUI)
@@ -495,7 +491,7 @@ func runControl(args []string) {
 			http.NotFound(w, r)
 			return
 		}
-		serveUI(w, r)
+		http.ServeFile(w, r, indexPath)
 	})
 
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}

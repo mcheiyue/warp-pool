@@ -35,6 +35,9 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 mkdir -p /run "${PID_DIR}" "${DATA_DIR}/instances" "${DATA_DIR}/state"
+# fix /run/netns for container restart (stale mount after docker restart)
+mkdir -p /run/netns
+mount --make-shared /run/netns 2>/dev/null || true
 ensure_host_forward
 
 if [ "$ENABLE_CONTROL" = "1" ]; then
