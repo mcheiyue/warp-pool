@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# warp-pool v0.3: Warp mode × netns × N + warppool aggregate/control/UI
 set -euo pipefail
 
 export DATA_DIR="${DATA_DIR:-/data}"
@@ -19,18 +20,22 @@ export ENABLE_AGGREGATE="${ENABLE_AGGREGATE:-1}"
 export ENABLE_CONTROL="${ENABLE_CONTROL:-1}"
 export ENABLE_HEALTH="${ENABLE_HEALTH:-1}"
 export HEALTH_AUTO_ROTATE="${HEALTH_AUTO_ROTATE:-0}"
-export DEREGISTER_ON_SHUTDOWN="${DEREGISTER_ON_SHUTDOWN:-1}"
-export ROTATE_MODE="${ROTATE_MODE:-reconnect}"
-export BOOT_HEALTH_WAIT="${BOOT_HEALTH_WAIT:-90}"
+export DEREGISTER_ON_SHUTDOWN="${DEREGISTER_ON_SHUTDOWN:-0}"
+export ROTATE_MODE="${ROTATE_MODE:-restart}"
+export BOOT_HEALTH_WAIT="${BOOT_HEALTH_WAIT:-120}"
 export WARP_CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-45}"
+export WEB_ROOT="${WEB_ROOT:-/opt/warp-pool/web}"
 
 # shellcheck source=/dev/null
 source "${SCRIPTS_DIR}/lib.sh"
 
-sudo mkdir -p /run "${PID_DIR}" /run/warp-pool
-sudo mkdir -p "${DATA_DIR}/instances" "${DATA_DIR}/state"
-sudo chown -R warp:warp "${DATA_DIR}" "${PID_DIR}" 2>/dev/null || true
-mkdir -p "${DATA_DIR}/instances" "${DATA_DIR}/state" "${PID_DIR}"
+if [ "$(id -u)" -ne 0 ]; then
+  err "v0.3 requires root (netns/tun/iptables)"
+  exit 1
+fi
+
+mkdir -p /run "${PID_DIR}" "${DATA_DIR}/instances" "${DATA_DIR}/state"
+ensure_host_forward
 
 if [ "$ENABLE_CONTROL" = "1" ]; then
   case "$CONTROL_BIND" in
@@ -57,7 +62,7 @@ cleanup() {
     kill "$pid" 2>/dev/null || true
   done
   for ((id = 0; id < WARP_INSTANCES; id++)); do
-    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" 2>/dev/null || true
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" drop-netns 2>/dev/null || true
   done
   for pid in "${PIDS[@]:-}"; do
     wait "$pid" 2>/dev/null || true
@@ -83,11 +88,7 @@ for ((id = 0; id < WARP_INSTANCES; id++)); do
     for ((t = 0; t < BOOT_HEALTH_WAIT; t += 3)); do
       if ip="$(probe_instance "$id")"; then
         write_meta "$id" true "$ip" 0 "" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-        meta="$(instance_dir "$id")/meta.json"
-        if [ -f "$meta" ]; then
-          jq 'del(.last_rotate) | . + {last_rotate:""}' "$meta" > "${meta}.tmp" && mv "${meta}.tmp" "$meta"
-        fi
-        log "instance ${id}: ready ip=${ip}"
+        log "instance ${id}: ready v4=${ip}"
         ready=1
         break
       fi
@@ -115,31 +116,42 @@ if [ "$started" -lt 1 ]; then
 fi
 
 log "started ${started}/${WARP_INSTANCES} instances"
-
 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
 if [ "$ENABLE_HEALTH" = "1" ]; then
-  bash "${SCRIPTS_DIR}/health-loop.sh" &
+  bash "${SCRIPTS_DIR}/health-loop.sh" >/tmp/health-loop.log 2>&1 &
   PIDS+=($!)
   log "health-loop pid=$!"
 fi
 
 if [ "$ENABLE_AGGREGATE" = "1" ] && [ "$started" -ge 1 ]; then
-  warppool aggregate --listen "0.0.0.0:${AGG_SOCKS_PORT}" --healthy "${DATA_DIR}/state/healthy.json" &
+  warppool aggregate --listen "0.0.0.0:${AGG_SOCKS_PORT}" --healthy "${DATA_DIR}/state/healthy.json" \
+    >/tmp/aggregate.log 2>&1 &
   PIDS+=($!)
   log "aggregate pid=$! on :${AGG_SOCKS_PORT}"
 fi
 
 if [ "$ENABLE_CONTROL" = "1" ]; then
-  warppool control --listen "${CONTROL_BIND}:${CONTROL_PORT}" --data "${DATA_DIR}" --scripts "${SCRIPTS_DIR}" --token "${CONTROL_TOKEN}" &
+  warppool control \
+    --listen "${CONTROL_BIND}:${CONTROL_PORT}" \
+    --data "${DATA_DIR}" \
+    --scripts "${SCRIPTS_DIR}" \
+    --token "${CONTROL_TOKEN}" \
+    --web "${WEB_ROOT}" \
+    >/tmp/control.log 2>&1 &
   PIDS+=($!)
-  log "control pid=$! on ${CONTROL_BIND}:${CONTROL_PORT}"
+  log "control+ui pid=$! on ${CONTROL_BIND}:${CONTROL_PORT} web=${WEB_ROOT}"
 fi
 
 log "supervising..."
 while true; do
   alive=0
   for ((id = 0; id < WARP_INSTANCES; id++)); do
+    # skip while rotate lock held
+    if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
+      alive=$((alive + 1))
+      continue
+    fi
     pf="$(pidfile_svc "$id")"
     if [ -f "$pf" ]; then
       pid="$(cat "$pf" || true)"
@@ -148,21 +160,15 @@ while true; do
       else
         log "instance ${id}: dead, restarting"
         bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
-        if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
+        if [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null || true)" 2>/dev/null; then
           alive=$((alive + 1))
         fi
       fi
     fi
   done
-
   if [ "$alive" -lt 1 ]; then
     err "all warp-svc processes dead"
     exit 1
   fi
-
-  if [ "$WARP_INSTANCES" = "1" ] && [ "$alive" -lt 1 ]; then
-    exit 1
-  fi
-
   sleep 5
 done

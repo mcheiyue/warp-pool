@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1
-# v0.2: official cloudflare-warp (proxy mode) × N + warppool aggregate/control
-
+# v0.3: Warp mode × netns × N + warppool aggregate/control + single-page WebUI
 ARG GO_VERSION=1.22
 ARG DEBIAN_VERSION=bookworm-slim
 
@@ -12,24 +11,20 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /warppool .
 
 FROM debian:${DEBIAN_VERSION}
 
-ARG TARGETPLATFORM
 ARG TARGETARCH
 ARG COMMIT_SHA=
+ARG GOST_VERSION=2.11.5
 
 LABEL org.opencontainers.image.title="warp-pool" \
-      org.opencontainers.image.description="Multi official WARP proxy pool (warp-svc × N + warppool)" \
+      org.opencontainers.image.description="Warp mode × netns multi-instance WARP pool" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/mcheiyue/warp-pool" \
       org.opencontainers.image.revision="${COMMIT_SHA}"
 
-COPY --from=warppool-build /warppool /usr/local/bin/warppool
-COPY scripts/ /opt/warp-pool/scripts/
-COPY entrypoint.sh /entrypoint.sh
-
 RUN set -eux; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
-    ca-certificates curl gnupg lsb-release sudo jq dbus; \
+    ca-certificates curl gnupg lsb-release jq dbus iproute2 iptables procps; \
   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
     | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg; \
   echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
@@ -38,14 +33,29 @@ RUN set -eux; \
   apt-get install -y --no-install-recommends cloudflare-warp; \
   apt-get clean; \
   rm -rf /var/lib/apt/lists/*; \
-  chmod +x /entrypoint.sh /usr/local/bin/warppool /opt/warp-pool/scripts/*.sh; \
-  useradd -m -s /bin/bash warp; \
-  echo "warp ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/warp; \
-  mkdir -p /home/warp/.local/share/warp; \
-  echo -n yes > /home/warp/.local/share/warp/accepted-tos.txt; \
-  chown -R warp:warp /home/warp
+  mkdir -p /opt/warp-pool/web /data/instances /run/warp-pool /root/.local/share/warp; \
+  echo -n yes > /root/.local/share/warp/accepted-tos.txt; \
+  case "${TARGETARCH}" in \
+    amd64) GOST_ARCH=amd64 ;; \
+    arm64) GOST_ARCH=arm64 ;; \
+    *) echo "unsupported arch: ${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  curl -fsSL -o /tmp/gost.gz \
+    "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-${GOST_ARCH}-${GOST_VERSION}.gz"; \
+  gunzip -c /tmp/gost.gz > /usr/local/bin/gost; \
+  chmod +x /usr/local/bin/gost; \
+  rm -f /tmp/gost.gz
 
-USER warp
+COPY --from=warppool-build /warppool /usr/local/bin/warppool
+COPY scripts/ /opt/warp-pool/scripts/
+COPY web/ /opt/warp-pool/web/
+COPY entrypoint.sh /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /usr/local/bin/gost \
+      /opt/warp-pool/scripts/*.sh
+
+# v0.3 needs root for netns / iptables / tun
+USER root
 
 ENV DATA_DIR=/data \
     WARP_INSTANCES=2 \
@@ -56,19 +66,19 @@ ENV DATA_DIR=/data \
     CONTROL_PORT=9090 \
     CONTROL_BIND=127.0.0.1 \
     WARP_CONNECT_TIMEOUT=45 \
-    BOOT_HEALTH_WAIT=90 \
+    BOOT_HEALTH_WAIT=120 \
     REGISTER_STAGGER=5 \
     REGISTER_JITTER_MAX=8 \
     PARTIAL_REGISTER_POLICY=degraded \
-    ROTATE_MODE=reconnect \
-    DEREGISTER_ON_SHUTDOWN=1 \
+    ROTATE_MODE=restart \
+    DEREGISTER_ON_SHUTDOWN=0 \
     ENABLE_AGGREGATE=1 \
     ENABLE_CONTROL=1 \
     ENABLE_HEALTH=1 \
-    HEALTH_AUTO_ROTATE=0
+    HEALTH_AUTO_ROTATE=0 \
+    WEB_ROOT=/opt/warp-pool/web
 
 VOLUME ["/data"]
-EXPOSE 1080 11000 9090
+EXPOSE 1080 11000 11001 9090
 
-# Default: no NET_ADMIN / no tun (WARP proxy mode)
 ENTRYPOINT ["/entrypoint.sh"]

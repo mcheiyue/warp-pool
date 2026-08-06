@@ -103,3 +103,19 @@
 - **Replace:** `scripts/ensure|start` 的 wgcf/wireproxy → `start-warp-instance` 风格官方启动；rotate 调 `warp-cli`；health 探 `40000+i` 或 `11000+i` 上 `warp=on`。
 - **Drop from default image:** wgcf、wireproxy 二进制（可另 tag `legacy-b1` 若仍要对照）。
 - **Optional later:** 编排模式（A：多 caomingjun 容器 + 仅 warppool 控制面）作为 `deploy/compose-sidecar` 示例，主产品仍是单镜像 B。
+
+## ADR-015: v0.3 主路径改为 Warp 模式 + netns + WebUI
+
+- **Status:** **Accepted** (2026-08-06) — G0 netns 探针 PASS，见 [probe-warp-netns.md](./probe-warp-netns.md)
+- **Context:**
+  - v0.2 WarpProxy：API/聚合可用，但 IPv4 常撞车；整容器/单实例重启 **不保证换 v4**。
+  - 双 `caomingjun/warp`（Mode **Warp**）旁路：v4 互异；只 restart 一侧则 **仅该侧 v4 变**。
+  - G0：同容器 netns×2 Warp 亦 v4 互异 + 单边 exact-PID restart 换 v4。
+  - 产品优先「一个容器内调度」，内存次要。
+- **Decision:**
+  1. 每实例：**独立 netns** + `warp-svc` **Mode Warp** + ns 内 **gost** SOCKS（veth `10.200.<id>.2:40000+id`）。
+  2. rotate 默认 = **restart**（停 expose/gost/warp-svc 精确 PID 再起，keep STATE）；`hard` 清 STATE 再注册。禁止 `pkill warp-svc`。
+  3. 保留 warppool aggregate/control；单页 WebUI 于 control 的 `/` 与 `/ui/`。
+  4. 权限：`NET_ADMIN` + `SYS_ADMIN` + `/dev/net/tun`；root entrypoint。
+- **Consequences:** 废弃「默认无 cap / proxy multi」叙事；v0.2 镜像逻辑 superseded；内存 ~80–110MiB×N；详见 `docs/pivot-v0.3.md`。
+

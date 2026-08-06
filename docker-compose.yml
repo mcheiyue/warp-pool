@@ -4,7 +4,15 @@ services:
     build: .
     container_name: warp-pool
     restart: unless-stopped
-    # v0.2 proxy mode: no NET_ADMIN / tun by default
+    # v0.3: Warp+netns needs privileged-class (ip netns mount + tun)
+    # ponytail: privileged is the shortest path that matches G0; tighten later if needed
+    privileged: true
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
     environment:
       WARP_INSTANCES: "${WARP_INSTANCES:-2}"
       INSTANCE_PORT_BASE: "${INSTANCE_PORT_BASE:-40000}"
@@ -15,28 +23,28 @@ services:
       CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
       CONTROL_TOKEN: "${CONTROL_TOKEN:-}"
       HEALTH_INTERVAL: "${HEALTH_INTERVAL:-60}"
-      HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-10}"
+      HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-15}"
       HEALTH_FAILURES: "${HEALTH_FAILURES:-3}"
       ROTATE_COOLDOWN: "${ROTATE_COOLDOWN:-300}"
-      ROTATE_MODE: "${ROTATE_MODE:-reconnect}"
+      ROTATE_MODE: "${ROTATE_MODE:-restart}"
       REGISTER_STAGGER: "${REGISTER_STAGGER:-5}"
       REGISTER_JITTER_MAX: "${REGISTER_JITTER_MAX:-8}"
       PARTIAL_REGISTER_POLICY: "${PARTIAL_REGISTER_POLICY:-degraded}"
       WARP_CONNECT_TIMEOUT: "${WARP_CONNECT_TIMEOUT:-45}"
-      BOOT_HEALTH_WAIT: "${BOOT_HEALTH_WAIT:-90}"
-      DEREGISTER_ON_SHUTDOWN: "${DEREGISTER_ON_SHUTDOWN:-1}"
+      BOOT_HEALTH_WAIT: "${BOOT_HEALTH_WAIT:-120}"
+      DEREGISTER_ON_SHUTDOWN: "${DEREGISTER_ON_SHUTDOWN:-0}"
       WARP_LICENSE_KEY: "${WARP_LICENSE_KEY:-}"
       ENABLE_AGGREGATE: "${ENABLE_AGGREGATE:-1}"
       ENABLE_CONTROL: "${ENABLE_CONTROL:-1}"
       ENABLE_HEALTH: "${ENABLE_HEALTH:-1}"
       HEALTH_AUTO_ROTATE: "${HEALTH_AUTO_ROTATE:-0}"
+      WEB_ROOT: "${WEB_ROOT:-/opt/warp-pool/web}"
     volumes:
       - warp-pool-data:/data
     ports:
       - "127.0.0.1:1080:1080"
-      # host-direct per instance (warppool expose -> warp 127.0.0.1:4000x)
       - "127.0.0.1:11000-11009:11000-11009"
-      # control stays container-local; exec-in or publish with token:
+      # control stays loopback inside; publish only with token, e.g.:
       # - "127.0.0.1:9090:9090"
     mem_limit: 512m
 

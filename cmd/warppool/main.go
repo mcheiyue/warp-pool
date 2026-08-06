@@ -38,7 +38,7 @@ func main() {
 }
 
 func fatalUsage() {
-	fmt.Fprintf(os.Stderr, "usage:\n  warppool aggregate --listen :1080 --healthy /data/state/healthy.json\n  warppool control --listen 127.0.0.1:9090 --data /data --scripts /opt/warp-pool/scripts\n  warppool expose --listen 0.0.0.0:11000 --backend 127.0.0.1:40000\n")
+	fmt.Fprintf(os.Stderr, "usage:\n  warppool aggregate --listen :1080 --healthy /data/state/healthy.json\n  warppool control --listen 127.0.0.1:9090 --data /data --scripts /opt/warp-pool/scripts [--web /opt/warp-pool/web] [--token T]\n  warppool expose --listen 0.0.0.0:11000 --backend 10.200.0.2:40000\n")
 	os.Exit(2)
 }
 
@@ -345,6 +345,10 @@ func runControl(args []string) {
 	listen := "127.0.0.1:9090"
 	data := "/data"
 	scripts := "/opt/warp-pool/scripts"
+	webRoot := os.Getenv("WEB_ROOT")
+	if webRoot == "" {
+		webRoot = "/opt/warp-pool/web"
+	}
 	token := os.Getenv("CONTROL_TOKEN")
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -367,6 +371,11 @@ func runControl(args []string) {
 			i++
 			if i < len(args) {
 				token = args[i]
+			}
+		case "--web":
+			i++
+			if i < len(args) {
+				webRoot = args[i]
 			}
 		}
 	}
@@ -405,7 +414,7 @@ func runControl(args []string) {
 		q := r.URL.Query()
 		mode := q.Get("mode")
 		if mode == "" {
-			mode = "reconnect" // v0.2 default; soft is alias in rotate-instance.sh
+			mode = "restart" // v0.3 default; soft|reconnect alias → restart in rotate-instance.sh
 		}
 		script := filepath.Join(scripts, "rotate-instance.sh")
 		var cmd *exec.Cmd
@@ -420,10 +429,23 @@ func runControl(args []string) {
 			cmd = exec.Command("/bin/bash", script, id, mode)
 		}
 		cmd.Env = os.Environ()
-		out, err := cmd.CombinedOutput()
+		// File stdout/stderr — CombinedOutput pipes hang if child daemons inherit the pipe
+		logFile := filepath.Join(os.TempDir(), fmt.Sprintf("warppool-rotate-%d.log", time.Now().UnixNano()))
+		f, err := os.Create(logFile)
+		if err != nil {
+			http.Error(w, "log create: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cmd.Stdout = f
+		cmd.Stderr = f
+		err = cmd.Run()
+		_, _ = f.Seek(0, 0)
+		out, _ := io.ReadAll(f)
+		_ = f.Close()
+		_ = os.Remove(logFile)
+		msg := string(out)
 		if err != nil {
 			status := http.StatusInternalServerError
-			msg := string(out)
 			if strings.Contains(msg, "cooldown") {
 				status = http.StatusTooManyRequests
 			}
@@ -434,7 +456,7 @@ func runControl(args []string) {
 			writeJSON(w, map[string]any{"ok": false, "error": err.Error(), "output": msg})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "output": string(out)})
+		writeJSON(w, map[string]any{"ok": true, "output": msg})
 	})
 	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -457,8 +479,27 @@ func runControl(args []string) {
 		writeJSON(w, map[string]any{"ok": true, "output": string(out)})
 	})
 
+	// single-page UI (and bare / → same page)
+	indexPath := filepath.Join(webRoot, "index.html")
+	serveUI := func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		http.ServeFile(w, r, indexPath)
+	}
+	mux.HandleFunc("/ui", serveUI)
+	mux.HandleFunc("/ui/", serveUI)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		serveUI(w, r)
+	})
+
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Printf("control api on %s", listen)
+	log.Printf("control api on %s web=%s", listen, webRoot)
 	log.Fatal(srv.ListenAndServe())
 }
 

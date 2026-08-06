@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# rotate-instance.sh <id|all> [reconnect|soft|hard]
-# reconnect|soft = disconnect+connect (default; often changes egress)
-# hard = registration delete + new + proxy + connect
+# rotate-instance.sh <id|all> [restart|hard]
+# restart (default) = kill warp-svc+gost exact PIDs, start again, keep STATE — changes v4
+# hard = wipe STATE + re-register + restart
+# soft|reconnect accepted as aliases of restart (v0.2 compat)
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-TARGET="${1:?usage: rotate-instance.sh <id|all> [reconnect|soft|hard]}"
-MODE="${2:-${ROTATE_MODE:-reconnect}}"
+TARGET="${1:?usage: rotate-instance.sh <id|all> [restart|hard]}"
+MODE="${2:-${ROTATE_MODE:-restart}}"
 COOLDOWN="${ROTATE_COOLDOWN:-300}"
 GAP="${ROTATE_ALL_GAP:-30}"
 
-# API compat: soft == reconnect
 case "$MODE" in
-  soft|reconnect|"") MODE=reconnect ;;
+  soft|reconnect|restart|"") MODE=restart ;;
   hard) MODE=hard ;;
-  *) err "unknown mode: $MODE (use reconnect|soft|hard)"; exit 2 ;;
+  *) err "unknown mode: $MODE (use restart|hard)"; exit 2 ;;
 esac
 
 rotate_one() {
@@ -45,43 +45,52 @@ rotate_one() {
     fi
   fi
 
-  local port
-  port="$(instance_port "$id")"
+  local lock="${PID_DIR}/rotate-${id}.lock"
+  mkdir -p "${PID_DIR}"
+  echo $$ > "$lock"
+  # always clear lock (API hang / set -e path)
+  # shellcheck disable=SC2064
+  trap "rm -f '$lock'" RETURN
+
+  export SUPERVISE_RESTART=0
+
+  write_meta "$id" false "" "$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)" \
+    "$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)" ""
+  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
   if [ "$MODE" = "hard" ]; then
-    log "instance ${id}: hard re-register"
-    wcli "$id" registration delete 2>/dev/null || true
-    sleep 1
-    # clear local reg if still present
-    sudo rm -f "$(instance_state_dir "$id")/reg.json" 2>/dev/null || true
-    wcli "$id" registration new
-    if [ -n "${WARP_LICENSE_KEY:-${LICENSE_KEY:-}}" ]; then
-      wcli "$id" registration license "${WARP_LICENSE_KEY:-$LICENSE_KEY}" 2>/dev/null || true
-    fi
-    wcli "$id" mode proxy
-    wcli "$id" proxy port "$port"
-    wcli "$id" connect
+    log "instance ${id}: hard — wipe STATE + restart"
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
+    rm -rf "$(instance_state_dir "$id")"
+    mkdir -p "$(instance_state_dir "$id")"
   else
-    log "instance ${id}: reconnect"
-    wcli "$id" disconnect 2>/dev/null || true
-    sleep 2
-    wcli "$id" mode proxy 2>/dev/null || true
-    wcli "$id" proxy port "$port" 2>/dev/null || true
-    wcli "$id" connect
+    log "instance ${id}: restart warp-svc (keep STATE) — v0.3 rotate"
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
   fi
 
+  bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
+  bash "${SCRIPTS_DIR}/start-instance.sh" "$id"
+
   sleep 5
-  local ts
+  local ts ok=0 ip=""
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if ip="$(probe_instance "$id")"; then
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    if ip="$(probe_instance "$id")"; then
+      ok=1
+      break
+    fi
+    sleep 3
+  done
+  if [ "$ok" = 1 ]; then
     write_meta "$id" true "$ip" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-    log "instance ${id}: rotate ok mode=${MODE} ip=${ip}"
+    log "instance ${id}: rotate ok mode=${MODE} v4=${ip}"
   else
     write_meta "$id" false "" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
     err "instance ${id}: probe failed after rotate"
+    SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
     return 1
   fi
-  bash "${SCRIPTS_DIR}/health-once.sh" || true
+  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 }
 
 if [ "$TARGET" = "all" ]; then

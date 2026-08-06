@@ -1,66 +1,61 @@
 # warp-pool
 
-Single Docker container. Multiple independent **official** Cloudflare WARP exits (`warp-svc` proxy mode). Port-direct or in-container SOCKS RR. Rotate one instance without killing the pool.
+One Docker container. Multiple independent Cloudflare WARP exits (**Warp mode**, one **netns** each). Port-direct or in-container SOCKS RR. Rotate one instance (restart) without killing the pool. Single-page WebUI on the control port.
 
-**v0.2 (primary):** official client × N + `warppool` aggregate/control.  
-**v0.1 B1:** wgcf+wireproxy — deprecated (does not rotate egress IP on tested hosts).
+**v0.3 (current):** Warp × netns + gost SOCKS + warppool + `/ui/` — IPv4 diversity + rotate-by-restart (G0 proven).  
+**v0.2:** proxy multi — superseded (pool OK, IPv4 rotate weak).  
+**v0.1 B1:** wgcf+wireproxy — deprecated.
 
-Image: **`ghcr.io/mcheiyue/warp-pool:latest`** (GitHub Actions → GHCR).
+Image: **`ghcr.io/mcheiyue/warp-pool:latest`** (when published).
 
 ## Quick start
 
 ```bash
-docker pull ghcr.io/mcheiyue/warp-pool:latest
-
 docker run -d --name warp-pool --restart unless-stopped \
+  --privileged \
+  --device /dev/net/tun \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   -e WARP_INSTANCES=2 \
   -v warp-pool-data:/data \
   -p 127.0.0.1:1080:1080 \
-  -p 127.0.0.1:40000-40001:40000-40001 \
+  -p 127.0.0.1:11000-11001:11000-11001 \
   ghcr.io/mcheiyue/warp-pool:latest
 ```
 
-Or: copy `.env.example` → `.env`, `docker compose up -d`.
+Or: `.env.example` → `.env`, `docker compose up -d`.
 
 ### Smoke
 
 ```bash
-curl --socks5-hostname 127.0.0.1:40000 https://cloudflare.com/cdn-cgi/trace
-curl --socks5-hostname 127.0.0.1:1080  https://cloudflare.com/cdn-cgi/trace
+# force IPv4
+curl -4 --socks5-hostname 127.0.0.1:11000 https://ipv4.icanhazip.com
+curl -4 --socks5-hostname 127.0.0.1:11001 https://ipv4.icanhazip.com
+curl -4 --socks5-hostname 127.0.0.1:1080  https://ipv4.icanhazip.com
+
 docker exec warp-pool curl -s http://127.0.0.1:9090/instances
-# reconnect rotate (default):
-docker exec warp-pool curl -s -X POST 'http://127.0.0.1:9090/rotate?id=0'
-# hard re-register:
-docker exec warp-pool curl -s -X POST 'http://127.0.0.1:9090/rotate?id=0&mode=hard'
+docker exec warp-pool curl -s -X POST 'http://127.0.0.1:9090/rotate?id=0&mode=restart'
+# UI (from inside / published control): http://127.0.0.1:9090/ui/
 ```
+
+`tests/smoke-v03.sh` automates the above (set `EXPOSE0`/`EXPOSE1`/`AGG`/`CTR`).
 
 ### Notes
 
-- **No `NET_ADMIN` / tun by default** (WARP **proxy** mode). UDP not available in proxy mode.
-- Control API defaults to `127.0.0.1:9090` inside the container.
-- Memory: roughly **~110MiB × N** + small aggregate; N=2 often **~220–270MiB**. Not a tiny wgcf pool.
-- Egress may be **IPv6**; rotate does not guarantee a “clean” or smarter IP — only a different/session refresh attempt.
-- `DEREGISTER_ON_SHUTDOWN=1` (default) deletes registrations on stop to limit device-slot leak.
-
-## Stack
-
-`cloudflare-warp` (`warp-svc` × N, isolated `STATE_DIRECTORY` / `RUNTIME_DIRECTORY` / dbus)  
-+ `warppool aggregate` (SOCKS RR) + health loop + control API.
+- **Needs** `NET_ADMIN`, `SYS_ADMIN`, `/dev/net/tun` (not the old “no cap” proxy story).
+- Control API default `127.0.0.1:9090`; non-loopback bind requires `CONTROL_TOKEN`.
+- Memory ~**80–110MiB × N** + small aggregate.
+- rotate default = **restart** instance (changes v4 in G0); `mode=hard` wipes registration.
+- Never `pkill warp-svc` (kills sibling netns processes).
 
 ## Docs
 
-- [docs/STATUS.md](./docs/STATUS.md) — current track  
-- [docs/probe-official.md](./docs/probe-official.md) — VPS probe numbers  
-- [docs/pivot-v0.2.md](./docs/pivot-v0.2.md) — reshape  
-- [docs/decisions.md](./docs/decisions.md) — ADRs  
-- [PLAN.md](./PLAN.md) — original B1 plan (historical)  
-- [.omo/plans/v0.2-official-pivot.md](./.omo/plans/v0.2-official-pivot.md) — v0.2 execution plan  
-
-## Not in scope
-
-Clash subscription factories, WARP+ traffic bots, heavy Web UI, coupling to any single downstream app.  
-No vendoring of CC-BY-NC third-party multi-WARP scripts.
+- [docs/STATUS.md](./docs/STATUS.md)
+- [docs/pivot-v0.3.md](./docs/pivot-v0.3.md)
+- [docs/probe-warp-netns.md](./docs/probe-warp-netns.md) — G0
+- [docs/decisions.md](./docs/decisions.md) — ADR-015
+- [tests/smoke-v03.sh](./tests/smoke-v03.sh)
 
 ## License
 
-MIT for original code. `cloudflare-warp` package is subject to Cloudflare’s terms.
+MIT for original code. `cloudflare-warp` / Cloudflare terms apply to the client package.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One health pass: probe all instances, update meta + healthy.json
+# One health pass: probe all instances via in-ns SOCKS, update meta + healthy.json
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -14,7 +14,6 @@ for ((id = 0; id < N; id++)); do
   dir="$(instance_dir "$id")"
   [ -d "$dir" ] || continue
   meta="${dir}/meta.json"
-  port="$(instance_port "$id")"
   pidfile="$(pidfile_svc "$id")"
   failures=0
   last_rotate=""
@@ -31,6 +30,11 @@ for ((id = 0; id < N; id++)); do
     fi
   fi
 
+  if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
+    log "instance ${id}: rotate in progress — skip"
+    continue
+  fi
+
   if [ "$alive" -eq 0 ]; then
     log "instance ${id}: process dead — marking unhealthy"
     write_meta "$id" false "" "$((failures + 1))" "$last_rotate" ""
@@ -42,15 +46,18 @@ for ((id = 0; id < N; id++)); do
 
   if ip="$(probe_instance "$id")"; then
     write_meta "$id" true "$ip" 0 "$last_rotate" "$(cat "$pidfile")"
-    backends_json="$(echo "$backends_json" | jq -c --argjson id "$id" --arg addr "127.0.0.1:${port}" '. + [{id:$id, addr:$addr}]')"
-    log "instance ${id}: healthy ip=${ip}"
+    backends_json="$(echo "$backends_json" | jq -c \
+      --argjson id "$id" \
+      --arg addr "$(socks_addr "$id")" \
+      '. + [{id:$id, addr:$addr}]')"
+    log "instance ${id}: healthy v4=${ip} socks=$(socks_addr "$id")"
   else
     failures=$((failures + 1))
     write_meta "$id" false "" "$failures" "$last_rotate" "$(cat "$pidfile")"
     log "instance ${id}: probe fail failures=${failures}"
     if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
-      log "instance ${id}: auto rotate (${ROTATE_MODE:-reconnect})"
-      bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-reconnect}" || true
+      log "instance ${id}: auto rotate (${ROTATE_MODE:-restart})"
+      bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-restart}" || true
     fi
   fi
 done

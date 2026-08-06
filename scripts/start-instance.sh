@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-instance.sh <id> — dbus + warp-svc proxy mode on INSTANCE_PORT_BASE+id
+# start-instance.sh <id> — Warp mode inside netns + gost SOCKS + optional expose
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -11,79 +11,93 @@ dbus_dir="$(instance_dbus_dir "$id")"
 dbus_sock="${dbus_dir}/system_bus_socket"
 pf_svc="$(pidfile_svc "$id")"
 pf_dbus="$(pidfile_dbus "$id")"
+pf_gost="$(pidfile_gost "$id")"
+pf_exp="$(pidfile_expose "$id")"
 
+ensure_host_forward
 ensure_dirs "$id"
+ensure_netns "$id"
 
-# already running?
 if [ -f "$pf_svc" ]; then
   old="$(cat "$pf_svc" || true)"
   if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
     log "instance ${id}: warp-svc already running pid=${old}"
-    exit 0
+  else
+    rm -f "$pf_svc"
   fi
 fi
 
-# per-instance dbus
-if [ -S "$dbus_sock" ]; then
-  log "instance ${id}: dbus socket exists, reuse if possible"
-else
-  sudo rm -f "${dbus_dir}/pid" 2>/dev/null || true
-  sudo dbus-daemon \
-    --address="unix:path=${dbus_sock}" \
-    --config-file=/usr/share/dbus-1/system.conf \
-    --nopidfile --nofork >/dev/null 2>&1 &
-  echo $! | sudo tee "$pf_dbus" >/dev/null
-  # dbus may be root; record host-visible pid from $!
-  echo $! > "$pf_dbus" 2>/dev/null || true
+# dbus in netns
+if [ ! -S "$dbus_sock" ]; then
+  rm -f "${dbus_dir}/pid" 2>/dev/null || true
+  ns_exec "$id" bash -c "
+    dbus-daemon --address='unix:path=${dbus_sock}' \
+      --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
+    echo \$! > '$pf_dbus'
+  "
   sleep 1
 fi
 
-log "instance ${id}: starting warp-svc (proxy port ${port})"
-sudo env \
-  STATE_DIRECTORY="$state" \
-  RUNTIME_DIRECTORY="$run" \
-  DBUS_SYSTEM_BUS_ADDRESS="unix:path=${dbus_sock}" \
-  warp-svc --accept-tos &
-svc_pid=$!
-echo "$svc_pid" > "$pf_svc"
-
-if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
-  err "instance ${id}: daemon not ready within ${WARP_CONNECT_TIMEOUT}s"
-  # continue anyway — register may still work
+if [ ! -f "$pf_svc" ] || ! kill -0 "$(cat "$pf_svc" 2>/dev/null || echo 0)" 2>/dev/null; then
+  log "instance ${id}: starting warp-svc in netns $(ns_name "$id")"
+  # write REAL warp-svc pid from inside ns (not ip-netns-exec wrapper)
+  ns_exec "$id" bash -c "
+    env STATE_DIRECTORY='$state' RUNTIME_DIRECTORY='$run' \
+      DBUS_SYSTEM_BUS_ADDRESS='unix:path=${dbus_sock}' \
+      warp-svc --accept-tos >/tmp/warp-svc-${id}.log 2>&1 &
+    echo \$! > '$pf_svc'
+  "
+  sleep 3
 fi
 
-# register if needed
-if [ ! -f "${state}/reg.json" ]; then
+if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
+  log "instance ${id}: daemon not Connected yet (continue register/connect)"
+fi
+
+if [ ! -f "${state}/reg.json" ] && ! find "$state" -name 'reg.json' 2>/dev/null | grep -q .; then
   log "instance ${id}: registration new"
   reg_ok=0
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6; do
     if wcli "$id" registration new 2>/dev/null; then
       reg_ok=1
       break
     fi
-    backoff=$((attempt * 3 + RANDOM % 3))
-    log "instance ${id}: register attempt ${attempt} failed, sleep ${backoff}s"
-    sleep "$backoff"
+    sleep $((attempt * 2 + RANDOM % 2))
   done
   if [ "$reg_ok" -ne 1 ]; then
     err "instance ${id}: registration failed"
+    tail -30 /tmp/warp-svc-"${id}".log 2>/dev/null || true
     exit 1
   fi
   if [ -n "${WARP_LICENSE_KEY:-${LICENSE_KEY:-}}" ]; then
-    key="${WARP_LICENSE_KEY:-$LICENSE_KEY}"
-    wcli "$id" registration license "$key" 2>/dev/null || log "instance ${id}: license apply failed (continue free)"
+    wcli "$id" registration license "${WARP_LICENSE_KEY:-$LICENSE_KEY}" 2>/dev/null || true
   fi
 fi
 
-  wcli "$id" mode proxy
-wcli "$id" proxy port "$port"
+wcli "$id" mode warp
 wcli "$id" connect
 wcli "$id" debug qlog disable 2>/dev/null || true
+wait_daemon_ready "$id" 90 || log "instance ${id}: still not Connected (probe will decide)"
 
-# CF proxy is 127.0.0.1-only; relay to 0.0.0.0 for Docker port-publish / host direct
+# gost SOCKS inside ns — traffic follows CloudflareWARP default route
+if [ -f "$pf_gost" ]; then
+  gpid="$(cat "$pf_gost" || true)"
+  if [ -n "$gpid" ] && kill -0 "$gpid" 2>/dev/null; then
+    kill "$gpid" 2>/dev/null || true
+    sleep 1
+  fi
+  rm -f "$pf_gost"
+fi
+log "instance ${id}: gost socks5 0.0.0.0:${port} in ns (reach via $(socks_addr "$id"))"
+ns_exec "$id" bash -c "
+  '$GOST_BIN' -L 'socks5://0.0.0.0:${port}' >/tmp/gost-${id}.log 2>&1 &
+  echo \$! > '$pf_gost'
+"
+sleep 1
+
+# expose host 0.0.0.0:11000+id -> ns peer socks
 if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
   exp="$(expose_port "$id")"
-  pf_exp="$(pidfile_expose "$id")"
   if [ -f "$pf_exp" ]; then
     old_exp="$(cat "$pf_exp" || true)"
     if [ -n "$old_exp" ] && kill -0 "$old_exp" 2>/dev/null; then
@@ -92,9 +106,12 @@ if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
     fi
     rm -f "$pf_exp"
   fi
-  log "instance ${id}: expose 0.0.0.0:${exp} -> 127.0.0.1:${port}"
-  warppool expose --listen "0.0.0.0:${exp}" --backend "127.0.0.1:${port}" &
+  log "instance ${id}: expose 0.0.0.0:${exp} -> $(socks_addr "$id")"
+  # must redirect stdio — otherwise parent CombinedOutput (control /rotate) hangs
+  warppool expose --listen "0.0.0.0:${exp}" --backend "$(socks_addr "$id")" \
+    </dev/null >/tmp/expose-"${id}".log 2>&1 &
   echo $! > "$pf_exp"
+  disown $! 2>/dev/null || true
 fi
 
-log "instance ${id}: proxy on 127.0.0.1:${port} expose=$(expose_port "$id") pid=$(cat "$pf_svc")"
+log "instance ${id}: warp+gost up pid=$(cat "$pf_svc") socks=$(socks_addr "$id")"

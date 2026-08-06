@@ -1,45 +1,40 @@
 #!/usr/bin/env bash
-# stop-instance.sh <id>
+# stop-instance.sh <id> [keep-netns]
+# Stops expose/gost/warp-svc/dbus. Keeps netns+STATE by default (for rotate restart).
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-id="${1:?usage: stop-instance.sh <id>}"
-pf_svc="$(pidfile_svc "$id")"
-pf_dbus="$(pidfile_dbus "$id")"
-pf_exp="$(pidfile_expose "$id")"
+id="${1:?usage: stop-instance.sh <id> [drop-netns]}"
+drop_ns="${2:-}"
 
-if [ -f "$pf_exp" ]; then
-  epid="$(cat "$pf_exp" || true)"
-  if [ -n "$epid" ]; then
-    log "instance ${id}: stop expose pid=${epid}"
-    kill "$epid" 2>/dev/null || true
-    kill -9 "$epid" 2>/dev/null || true
-  fi
-  rm -f "$pf_exp"
-fi
-
-if [ -f "$pf_svc" ]; then
-  pid="$(cat "$pf_svc" || true)"
-  if [ -n "$pid" ]; then
-    log "instance ${id}: stop warp-svc pid=${pid}"
-    sudo kill "$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-    for _ in 1 2 3 4 5; do
-      kill -0 "$pid" 2>/dev/null || break
+_kill_pidfile() {
+  local pf="$1" label="$2"
+  if [ -f "$pf" ]; then
+    local pid
+    pid="$(cat "$pf" || true)"
+    if [ -n "$pid" ]; then
+      log "instance ${id}: stop ${label} pid=${pid}"
+      kill "$pid" 2>/dev/null || true
       sleep 1
-    done
-    sudo kill -9 "$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pf"
   fi
-  rm -f "$pf_svc"
+}
+
+_kill_pidfile "$(pidfile_expose "$id")" "expose"
+_kill_pidfile "$(pidfile_gost "$id")" "gost"
+_kill_pidfile "$(pidfile_svc "$id")" "warp-svc"
+_kill_pidfile "$(pidfile_dbus "$id")" "dbus"
+
+rm -f "$(instance_dbus_dir "$id")/system_bus_socket" 2>/dev/null || true
+
+if [ "$drop_ns" = "drop-netns" ]; then
+  name="$(ns_name "$id")"
+  veth="$(veth_host "$id")"
+  ip link del "$veth" 2>/dev/null || true
+  ip netns del "$name" 2>/dev/null || true
+  log "instance ${id}: netns dropped"
 fi
 
-if [ -f "$pf_dbus" ]; then
-  dpid="$(cat "$pf_dbus" || true)"
-  if [ -n "$dpid" ]; then
-    sudo kill "$dpid" 2>/dev/null || kill "$dpid" 2>/dev/null || true
-  fi
-  rm -f "$pf_dbus"
-fi
-
-# best-effort cleanup sockets
-sudo rm -f "$(instance_dbus_dir "$id")/system_bus_socket" 2>/dev/null || true
 log "instance ${id}: stopped"

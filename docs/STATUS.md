@@ -1,28 +1,36 @@
-# Status
+# STATUS — warp-pool
 
-**Current primary path: v0.2 official (`warp-svc` proxy × N).**
+**Primary track: v0.3 (Warp + netns + WebUI)**  
+Date: 2026-08-06
 
-| Track | State |
-|-------|--------|
-| v0.1 B1 (`wgcf` + `wireproxy`) | **Deprecated** — fast/tiny but exit IP does not rotate on tested VPS |
-| v0.2 official | **Implementing / shipping** on branch `v0.2-official` → `main` |
+## Done
 
-## Evidence
+- [x] G0 netns×2 Warp probe — PASS (`docs/probe-warp-netns.md`)
+- [x] Core scripts: netns/veth, start/stop/rotate(restart|hard), health, entrypoint
+- [x] Dockerfile: root, cloudflare-warp, iproute2, iptables, gost, web; **privileged** required
+- [x] warppool API: `/instances` `/rotate` `/health` `/healthcheck` `/ui` (rotate default=restart; file-log exec avoids pipe hang)
+- [x] `web/index.html` single page
+- [x] compose privileged + sysctls; `.env.example`; ADR-015 Accepted
+- [x] `tests/smoke-v03.sh`
+- [x] **VPS side-car smoke** `warp-pool:v0.3-local` as `warp-pool-v03`:
+  - ports 19080 / 19100 / 19101 / 19090
+  - boot N=2 healthy, v4 diverse, aggregate OK
+  - `POST /rotate?id=0` returns `ok`, v4 changes, peer stable
+  - RSS ~240MiB (N=2)
 
-- `docs/probe-official.md` — N=2 official multi ~265MiB, IP diversity, rotate works
-- `docs/pivot-v0.2.md` — reshape notes
-- ADR-013/014 in `docs/decisions.md`
+## Not done
 
-## B1 script inventory (historical)
+- [ ] Push GHCR `latest` as v0.3 (needs git commit + Actions or manual push)
+- [ ] Long soak / N>2
+- [ ] Drop `privileged` to minimal caps if possible later
 
-Former B1-only concerns (replaced in v0.2):
+## Superseded
 
-- `sanitize_wgconf` / wgcf register paths in old `lib.sh`
-- `wireproxy.conf` generation
-- `INSTANCE_PORT_BASE=11000` default
+- v0.2 WarpProxy multi tunnel path
+- v0.1 B1 wgcf+wireproxy
 
 ## Ops
 
-- Default ports: aggregate `1080`, direct `40000+i`, control `127.0.0.1:9090`
-- Memory: expect ~110MiB × N + aggregate (N=2 often ~220–270MiB)
-- Smoke on VPS: use **19xxx** side ports; do not steal `warp-chen` `:1080`
+- IPv4: `curl -4 --socks5-hostname … https://ipv4.icanhazip.com`
+- Side-car 19xxx; do not steal warp-chen `:1080`
+- `ROTATE_COOLDOWN` default 300; smoke used 0
