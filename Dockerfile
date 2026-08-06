@@ -31,16 +31,15 @@ RUN set -eux; \
     > /etc/apt/sources.list.d/cloudflare-client.list; \
   apt-get update; \
   apt-get install -y --no-install-recommends cloudflare-warp; \
-  # B3: microsocks preferred (bookworm apt); fallback compile from rofl0r/microsocks
-  if apt-get install -y --no-install-recommends microsocks; then \
-    true; \
-  else \
+  # B3: microsocks preferred (bookworm apt); else compile from rofl0r/microsocks
+  if ! apt-get install -y --no-install-recommends microsocks; then \
     apt-get install -y --no-install-recommends build-essential git make; \
     git clone --depth 1 https://github.com/rofl0r/microsocks /tmp/microsocks; \
     make -C /tmp/microsocks; \
     cp /tmp/microsocks/microsocks /usr/local/bin/microsocks; \
     chmod +x /usr/local/bin/microsocks; \
     rm -rf /tmp/microsocks; \
+    apt-get purge -y --auto-remove build-essential git make; \
   fi; \
   apt-get clean; \
   rm -rf /var/lib/apt/lists/*; \
@@ -59,8 +58,8 @@ COPY scripts/ /opt/warp-pool/scripts/
 COPY web/ /opt/warp-pool/web/
 COPY entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /usr/local/bin/gost \
-      /opt/warp-pool/scripts/*.sh
+RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /opt/warp-pool/scripts/*.sh; \
+    if [ -f /usr/local/bin/gost ]; then chmod +x /usr/local/bin/gost; fi
 
 USER root
 
