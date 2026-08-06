@@ -36,6 +36,8 @@ fi
 
 mkdir -p /run "${PID_DIR}" "${DATA_DIR}/instances" "${DATA_DIR}/state"
 # fix /run/netns for container restart (stale mount after docker restart)
+umount -l /run/netns 2>/dev/null || true
+rm -rf /run/netns/*
 mkdir -p /run/netns
 mount --make-shared /run/netns 2>/dev/null || true
 ensure_host_forward
