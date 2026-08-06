@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     # v0.3: Warp+netns needs privileged-class (ip netns mount + tun)
     # ponytail: privileged is the shortest path that matches G0; tighten later if needed
+    # Try caps-only: docker compose -f docker-compose.yml -f docker-compose.caps.yml up -d
+    # (cap_add NET_ADMIN SYS_ADMIN + tun + sysctls; no privileged). Fallback: this file.
     privileged: true
     devices:
       - /dev/net/tun:/dev/net/tun

@@ -387,6 +387,9 @@ func runControl(args []string) {
 		}
 	}
 
+	// apply any prior hot config so child scripts see it via os.Environ()
+	_ = applyRuntimeConfig(data)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if !authOK(r, token) {
@@ -395,12 +398,35 @@ func runControl(args []string) {
 		}
 		writeJSON(w, readHealth(data))
 	})
+	mux.HandleFunc("/config", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, getConfig(listen, token))
+		case http.MethodPut:
+			handlePutConfig(w, r, data, listen, token)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/instances", func(w http.ResponseWriter, r *http.Request) {
 		if !authOK(r, token) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		writeJSON(w, readInstances(data))
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, readInstances(data))
+		case http.MethodPost:
+			handlePostInstances(w, r, data)
+		case http.MethodDelete:
+			handleDeleteInstance(w, r, data, scripts)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 	mux.HandleFunc("/rotate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -446,17 +472,35 @@ func runControl(args []string) {
 		msg := string(out)
 		if err != nil {
 			status := http.StatusInternalServerError
+			resp := map[string]any{"ok": false, "error": err.Error(), "output": msg}
 			if strings.Contains(msg, "cooldown") {
 				status = http.StatusTooManyRequests
 			}
 			if strings.Contains(msg, "not found") {
 				status = http.StatusNotFound
 			}
+			if strings.Contains(msg, "v4_collision") {
+				status = http.StatusConflict
+				resp["reason"] = "v4_collision"
+			}
+			if a := parseAttempts(msg); a > 0 {
+				resp["attempts"] = a
+			}
+			if v4 := parseV4FromOutput(msg); v4 != "" {
+				resp["v4"] = v4
+			}
 			w.WriteHeader(status)
-			writeJSON(w, map[string]any{"ok": false, "error": err.Error(), "output": msg})
+			writeJSON(w, resp)
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "output": msg})
+		okResp := map[string]any{"ok": true, "output": msg, "unique": true}
+		if a := parseAttempts(msg); a > 0 {
+			okResp["attempts"] = a
+		}
+		if v4 := parseV4FromOutput(msg); v4 != "" {
+			okResp["v4"] = v4
+		}
+		writeJSON(w, okResp)
 	})
 	mux.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -497,6 +541,46 @@ func runControl(args []string) {
 	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	log.Printf("control api on %s web=%s", listen, webRoot)
 	log.Fatal(srv.ListenAndServe())
+}
+
+func parseAttempts(msg string) int {
+	const key = "attempts="
+	idx := strings.LastIndex(msg, key)
+	if idx < 0 {
+		return 0
+	}
+	rest := msg[idx+len(key):]
+	n := 0
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+func parseV4FromOutput(msg string) string {
+	// prefer "v4=1.2.3.4" tokens from rotate logs
+	const key = "v4="
+	idx := strings.LastIndex(msg, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := msg[idx+len(key):]
+	end := 0
+	for end < len(rest) {
+		c := rest[end]
+		if (c >= '0' && c <= '9') || c == '.' {
+			end++
+			continue
+		}
+		break
+	}
+	if end == 0 {
+		return ""
+	}
+	return rest[:end]
 }
 
 func authOK(r *http.Request, token string) bool {
@@ -564,4 +648,202 @@ func readInstances(data string) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// --- hot config (WP-D skeleton) ---
+
+// env keys allowed via PUT /config (JSON snake_case → ENV)
+var configWhitelist = map[string]string{
+	"rotate_cooldown":         "ROTATE_COOLDOWN",
+	"health_auto_rotate":      "HEALTH_AUTO_ROTATE",
+	"v4_unique":               "V4_UNIQUE",
+	"v4_unique_retries":       "V4_UNIQUE_RETRIES",
+	"v4_unique_hard_retries":  "V4_UNIQUE_HARD_RETRIES",
+	"v4_unique_backoff":       "V4_UNIQUE_BACKOFF",
+	"rotate_mode":             "ROTATE_MODE",
+}
+
+func runtimeConfigPath(data string) string {
+	return filepath.Join(data, "state", "runtime-config.json")
+}
+
+func desiredNPath(data string) string {
+	return filepath.Join(data, "state", "desired_n.json")
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func getConfig(listen, token string) map[string]any {
+	return map[string]any{
+		"warp_instances":          envOr("WARP_INSTANCES", "0"),
+		"rotate_cooldown":         envOr("ROTATE_COOLDOWN", "300"),
+		"rotate_mode":             envOr("ROTATE_MODE", "restart"),
+		"v4_unique":               envOr("V4_UNIQUE", "1"),
+		"v4_unique_retries":       envOr("V4_UNIQUE_RETRIES", "3"),
+		"v4_unique_hard_retries":  envOr("V4_UNIQUE_HARD_RETRIES", "1"),
+		"v4_unique_backoff":       envOr("V4_UNIQUE_BACKOFF", "5"),
+		"health_auto_rotate":      envOr("HEALTH_AUTO_ROTATE", "0"),
+		"control_bind":            envOr("CONTROL_BIND", listen),
+		"token_set":               strings.TrimSpace(token) != "",
+	}
+}
+
+func applyRuntimeConfig(data string) error {
+	b, err := os.ReadFile(runtimeConfigPath(data))
+	if err != nil {
+		return err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	for k, envKey := range configWhitelist {
+		if v, ok := m[k]; ok {
+			_ = os.Setenv(envKey, fmt.Sprint(v))
+		}
+	}
+	return nil
+}
+
+func handlePutConfig(w http.ResponseWriter, r *http.Request, data, listen, token string) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	// merge with existing file
+	cur := map[string]any{}
+	if b, err := os.ReadFile(runtimeConfigPath(data)); err == nil {
+		_ = json.Unmarshal(b, &cur)
+	}
+	applied := map[string]any{}
+	for k, v := range body {
+		envKey, ok := configWhitelist[k]
+		if !ok {
+			continue
+		}
+		cur[k] = v
+		s := fmt.Sprint(v)
+		_ = os.Setenv(envKey, s)
+		applied[k] = v
+	}
+	if err := os.MkdirAll(filepath.Join(data, "state"), 0o755); err != nil {
+		http.Error(w, "state dir: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	b, err := json.MarshalIndent(cur, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(runtimeConfigPath(data), b, 0o644); err != nil {
+		http.Error(w, "write: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "applied": applied, "config": getConfig(listen, token)})
+}
+
+func handlePostInstances(w http.ResponseWriter, r *http.Request, data string) {
+	// want N via ?want= / ?n= / body {"want":N} / {"n":N}; bare POST adds +1
+	want := 0
+	if q := r.URL.Query().Get("want"); q != "" {
+		want, _ = strconv.Atoi(q)
+	} else if q := r.URL.Query().Get("n"); q != "" {
+		want, _ = strconv.Atoi(q)
+	}
+	if want <= 0 && r.Body != nil {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			if v, ok := body["want"]; ok {
+				want, _ = strconv.Atoi(fmt.Sprint(v))
+			} else if v, ok := body["n"]; ok {
+				want, _ = strconv.Atoi(fmt.Sprint(v))
+			}
+		}
+	}
+	cur := len(readInstances(data))
+	if dn, err := readDesiredN(data); err == nil && dn > cur {
+		cur = dn
+	}
+	if want <= 0 {
+		want = cur + 1
+	}
+	if err := writeDesiredN(data, want); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = os.Setenv("WARP_INSTANCES", strconv.Itoa(want))
+	writeJSON(w, map[string]any{
+		"ok":      true,
+		"desired": want,
+		"note":    "supervisor pending",
+	})
+}
+
+func handleDeleteInstance(w http.ResponseWriter, r *http.Request, data, scripts string) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	if _, err := strconv.Atoi(id); err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	// mark for removal (supervisor can consume later)
+	_ = os.MkdirAll(filepath.Join(data, "state"), 0o755)
+	_ = os.WriteFile(filepath.Join(data, "state", "remove-id"), []byte(id+"\n"), 0o644)
+
+	script := filepath.Join(scripts, "stop-instance.sh")
+	cmd := exec.Command("/bin/bash", script, id)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// still recorded remove-id; surface script failure
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]any{
+			"ok": false, "id": id, "remove_marked": true,
+			"error": err.Error(), "output": string(out),
+		})
+		return
+	}
+	// lower desired if present
+	if dn, err := readDesiredN(data); err == nil && dn > 0 {
+		_ = writeDesiredN(data, dn-1)
+	}
+	writeJSON(w, map[string]any{"ok": true, "id": id, "stopped": true, "output": string(out)})
+}
+
+func readDesiredN(data string) (int, error) {
+	b, err := os.ReadFile(desiredNPath(data))
+	if err != nil {
+		return 0, err
+	}
+	var m struct {
+		Desired int `json:"desired"`
+		N       int `json:"n"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return 0, err
+	}
+	if m.Desired > 0 {
+		return m.Desired, nil
+	}
+	return m.N, nil
+}
+
+func writeDesiredN(data string, n int) error {
+	if err := os.MkdirAll(filepath.Join(data, "state"), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(map[string]any{"desired": n, "ts": time.Now().UTC().Format(time.RFC3339)}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(desiredNPath(data), b, 0o644)
 }

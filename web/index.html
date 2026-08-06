@@ -7,31 +7,33 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f0f13; color: #e0e0e0; min-height: 100vh; }
-    .app { max-width: 680px; margin: 0 auto; padding: 32px 16px; }
-    .header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
-    .header h1 { font-size: 1.6rem; font-weight: 700; color: #f0f0f0; letter-spacing: -0.02em; }
+    .app { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
+    .header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+    .header h1 { font-size: 1.6rem; font-weight: 700; color: #f0f0f0; }
     .header .tag { font-size: 0.75rem; color: #888; background: #1a1a24; padding: 2px 10px; border-radius: 999px; }
-    .header .refresh { margin-left: auto; background: none; border: 1px solid #333; color: #aaa; font-size: 0.85rem; padding: 4px 14px; border-radius: 8px; cursor: pointer; }
-    .header .refresh:hover { background: #1e1e2a; color: #fff; }
-    .card { background: #17171f; border-radius: 14px; overflow: hidden; margin-bottom: 10px; }
+    .header .btn { margin-left: auto; background: none; border: 1px solid #333; color: #aaa; font-size: 0.85rem; padding: 4px 14px; border-radius: 8px; cursor: pointer; }
+    .header .btn:hover { background: #1e1e2a; color: #fff; }
+    .header .btn.primary { border-color: #22c55e; color: #22c55e; }
+    .card { background: #17171f; border-radius: 14px; margin-bottom: 10px; }
     .card-body { padding: 16px 20px; display: flex; align-items: center; gap: 12px; }
-    .card .id { font-weight: 600; font-size: 1.1rem; color: #888; min-width: 32px; }
+    .card .id { font-weight: 600; font-size: 1.1rem; color: #888; min-width: 28px; }
     .card .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .card .dot.ok { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.4); }
     .card .dot.fail { background: #ef4444; }
     .card .info { flex: 1; min-width: 0; }
-    .card .info .v4 { font-size: 1.1rem; font-weight: 600; color: #22c55e; font-variant-numeric: tabular-nums; }
-    .card .info .meta { font-size: 0.8rem; color: #666; margin-top: 2px; }
-    .card .rotate-btn { background: none; border: 1px solid #333; color: #aaa; font-size: 0.8rem; padding: 6px 14px; border-radius: 8px; cursor: pointer; white-space: nowrap; }
-    .card .rotate-btn:hover { border-color: #22c55e; color: #22c55e; background: rgba(34,197,94,0.08); }
+    .card .v4 { font-size: 1.05rem; font-weight: 600; color: #22c55e; font-variant-numeric: tabular-nums; }
+    .card .v6 { font-size: 0.8rem; color: #818cf8; margin-top: 2px; word-break: break-all; }
+    .card .meta { font-size: 0.75rem; color: #666; margin-top: 4px; }
+    .card .rotate-btn { background: none; border: 1px solid #333; color: #aaa; font-size: 0.8rem; padding: 6px 14px; border-radius: 8px; cursor: pointer; }
+    .card .rotate-btn:hover { border-color: #22c55e; color: #22c55e; }
     .card .rotate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .agg { margin-top: 20px; padding: 14px 20px; background: #17171f; border-radius: 14px; display: flex; align-items: center; gap: 12px; }
+    .agg { margin-top: 16px; padding: 14px 20px; background: #17171f; border-radius: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .agg .label { font-size: 0.8rem; color: #666; }
     .agg .port { font-size: 1.1rem; font-weight: 600; color: #f0f0f0; }
     .msg { text-align: center; padding: 40px 20px; color: #888; }
     .auth { background: #17171f; border-radius: 14px; padding: 24px; margin-bottom: 16px; }
     .auth label { display: block; font-size: 0.85rem; color: #888; margin-bottom: 8px; }
-    .auth input { width: 100%; background: #0f0f13; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; font-size: 0.95rem; margin-bottom: 12px; }
+    .auth input { width: 100%; background: #0f0f13; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
     .auth button { background: #22c55e; border: none; color: #0f0f13; font-weight: 600; padding: 10px 20px; border-radius: 8px; cursor: pointer; }
     .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1e1e2a; color: #ccc; padding: 10px 24px; border-radius: 10px; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
     .toast.show { opacity: 1; }
@@ -41,13 +43,14 @@
   <div class="app">
     <div class="header">
       <h1>warppool</h1>
-      <span class="tag">v0.3</span>
-      <button class="refresh" onclick="load()">↻ 刷新</button>
+      <span class="tag">v0.4</span>
+      <button class="btn" type="button" onclick="load()">↻ 刷新</button>
+      <button class="btn primary" type="button" onclick="rotateAll()">全部旋转</button>
     </div>
     <div id="auth" class="auth" style="display:none">
-      <label>CONTROL_TOKEN（API 需要鉴权）</label>
+      <label>CONTROL_TOKEN</label>
       <input id="token-input" type="password" placeholder="输入 token" autocomplete="off">
-      <button onclick="saveToken()">保存并加载</button>
+      <button type="button" onclick="saveToken()">保存并加载</button>
     </div>
     <div id="list"><div class="msg">加载中…</div></div>
     <div class="agg">
@@ -55,18 +58,25 @@
       <span class="port">:1080</span>
       <span style="flex:1"></span>
       <span class="label" id="agg-status">—</span>
+      <span class="label" id="cd-status"></span>
     </div>
   </div>
   <div id="toast" class="toast"></div>
   <script>
+    let cooldownSec = 300;
     function getToken() {
       const q = new URLSearchParams(location.search).get('token');
       if (q) { localStorage.setItem('wp_token', q); return q; }
       return localStorage.getItem('wp_token') || '';
     }
-    function authQS() {
+    function authQS(prefix) {
       const t = getToken();
-      return t ? '?token=' + encodeURIComponent(t) : '';
+      if (!t) return '';
+      return (prefix || '?') + 'token=' + encodeURIComponent(t);
+    }
+    function tokAmp() {
+      const t = getToken();
+      return t ? '&token=' + encodeURIComponent(t) : '';
     }
     function saveToken() {
       const v = document.getElementById('token-input').value.trim();
@@ -78,34 +88,55 @@
       document.getElementById('auth').style.display = 'none';
       load();
     }
+    function cooldownLeft(last) {
+      if (!last || !cooldownSec) return '';
+      const t = Date.parse(last);
+      if (!t) return '';
+      const left = Math.ceil((t + cooldownSec * 1000 - Date.now()) / 1000);
+      if (left <= 0) return '可旋转';
+      return '冷却 ' + left + 's';
+    }
+    async function loadConfig() {
+      try {
+        const res = await fetch('/config' + authQS(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const c = await res.json();
+        const n = parseInt(c.rotate_cooldown, 10);
+        if (!isNaN(n) && n >= 0) cooldownSec = n;
+        document.getElementById('cd-status').textContent = 'cooldown ' + cooldownSec + 's';
+      } catch (_) {}
+    }
     async function load() {
       const list = document.getElementById('list');
       try {
         const res = await fetch('/instances' + authQS(), { cache: 'no-store' });
         if (res.status === 401) {
           document.getElementById('auth').style.display = 'block';
-          list.innerHTML = '<div class="msg">需要 token 才能读取实例。请在上方输入 CONTROL_TOKEN。</div>';
+          list.innerHTML = '<div class="msg">需要 token。请输入 CONTROL_TOKEN。</div>';
           return;
         }
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         document.getElementById('auth').style.display = 'none';
         render(Array.isArray(data) ? data : []);
+        loadConfig();
       } catch (e) {
-        list.innerHTML = '<div class="msg">连接失败：' + e.message + '<br><small>确认隧道指向 19090，且容器在跑</small></div>';
+        list.innerHTML = '<div class="msg">连接失败：' + e.message + '<br><small>隧道 → 9090/19090，容器需在跑</small></div>';
       }
     }
     function render(instances) {
       const list = document.getElementById('list');
       list.innerHTML = '';
       if (!instances.length) {
-        list.innerHTML = '<div class="msg">暂无实例（启动中或尚未写入 meta）</div>';
+        list.innerHTML = '<div class="msg">暂无实例</div>';
         document.getElementById('agg-status').textContent = '健康 0/0';
         return;
       }
       let ok = 0;
+      instances.sort((a, b) => (a.id|0) - (b.id|0));
       instances.forEach(inst => {
         if (inst.healthy) ok++;
+        const cd = cooldownLeft(inst.last_rotate);
         const card = document.createElement('div');
         card.className = 'card';
         card.innerHTML =
@@ -114,9 +145,15 @@
             '<div class="dot ' + (inst.healthy ? 'ok' : 'fail') + '"></div>' +
             '<div class="info">' +
               '<div class="v4">' + (inst.v4 || inst.ip || '—') + '</div>' +
-              '<div class="meta">expose :' + (inst.expose || '?') + ' · ' + (inst.mode || 'warp') + '</div>' +
+              (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
+              '<div class="meta">:' + (inst.expose || '?') +
+                ' · ' + (inst.mode || 'warp') +
+                (inst.unique === false ? ' · 冲突' : '') +
+                (inst.last_rotate ? ' · ' + inst.last_rotate : '') +
+                (cd ? ' · ' + cd : '') +
+              '</div>' +
             '</div>' +
-            '<button class="rotate-btn" id="rot-' + inst.id + '" onclick="rotate(' + inst.id + ')">重启</button>' +
+            '<button class="rotate-btn" id="rot-' + inst.id + '" type="button" onclick="rotate(' + inst.id + ')">重启</button>' +
           '</div>';
         list.appendChild(card);
       });
@@ -124,21 +161,38 @@
     }
     async function rotate(id) {
       const btn = document.getElementById('rot-' + id);
-      if (btn) { btn.disabled = true; btn.textContent = '旋转中…'; }
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
       try {
-        const res = await fetch('/rotate?id=' + id + '&mode=restart' + (getToken() ? '&token=' + encodeURIComponent(getToken()) : ''), { method: 'POST' });
+        const res = await fetch('/rotate?id=' + id + '&mode=restart' + tokAmp(), { method: 'POST' });
         const j = await res.json().catch(() => ({}));
-        showToast(res.ok && j.ok !== false ? ('实例 ' + id + ' 已重启') : ('失败: ' + (j.error || res.status)));
+        if (res.status === 409 || j.reason === 'v4_collision') {
+          showToast('实例 ' + id + ' v4 冲突 (attempts=' + (j.attempts || '?') + ')');
+        } else if (res.ok && j.ok !== false) {
+          showToast('实例 ' + id + ' ok' + (j.v4 ? ' → ' + j.v4 : ''));
+        } else {
+          showToast('失败: ' + (j.error || j.output || res.status));
+        }
       } catch (e) {
-        showToast('重启失败: ' + e.message);
+        showToast('失败: ' + e.message);
       }
-      setTimeout(load, 1500);
+      setTimeout(load, 2000);
+    }
+    async function rotateAll() {
+      showToast('全部旋转中…');
+      try {
+        const res = await fetch('/rotate?all=1&mode=restart' + tokAmp(), { method: 'POST' });
+        const j = await res.json().catch(() => ({}));
+        showToast(res.ok ? '全部旋转已提交' : ('失败 ' + (j.error || res.status)));
+      } catch (e) {
+        showToast(e.message);
+      }
+      setTimeout(load, 3000);
     }
     function showToast(msg) {
       const t = document.getElementById('toast');
       t.textContent = msg;
       t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 2500);
+      setTimeout(() => t.classList.remove('show'), 2800);
     }
     setInterval(load, 5000);
     load();

@@ -31,10 +31,22 @@ RUN set -eux; \
     > /etc/apt/sources.list.d/cloudflare-client.list; \
   apt-get update; \
   apt-get install -y --no-install-recommends cloudflare-warp; \
+  # B3: microsocks preferred (bookworm apt); fallback compile from rofl0r/microsocks
+  if apt-get install -y --no-install-recommends microsocks; then \
+    true; \
+  else \
+    apt-get install -y --no-install-recommends build-essential git make; \
+    git clone --depth 1 https://github.com/rofl0r/microsocks /tmp/microsocks; \
+    make -C /tmp/microsocks; \
+    cp /tmp/microsocks/microsocks /usr/local/bin/microsocks; \
+    chmod +x /usr/local/bin/microsocks; \
+    rm -rf /tmp/microsocks; \
+  fi; \
   apt-get clean; \
   rm -rf /var/lib/apt/lists/*; \
   mkdir -p /opt/warp-pool/web /data/instances /run/warp-pool /root/.local/share/warp; \
   echo -n yes > /root/.local/share/warp/accepted-tos.txt; \
+  # gost kept as fallback (amd64 only for now; multi-arch later)
   GOST_ARCH=amd64; \
   curl -fsSL -o /tmp/gost.gz \
     "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-amd64-${GOST_VERSION}.gz"; \
@@ -71,7 +83,8 @@ ENV DATA_DIR=/data \
     ENABLE_CONTROL=1 \
     ENABLE_HEALTH=1 \
     HEALTH_AUTO_ROTATE=0 \
-    WEB_ROOT=/opt/warp-pool/web
+    WEB_ROOT=/opt/warp-pool/web \
+    SOCKS_BIN=microsocks
 
 VOLUME ["/data"]
 EXPOSE 1080 11000 11001 9090

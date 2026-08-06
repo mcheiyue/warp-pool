@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # One health pass: probe all instances via in-ns SOCKS, update meta + healthy.json
+# Only unique+healthy instances enter backends (V4_UNIQUE=1)
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -37,7 +38,7 @@ for ((id = 0; id < N; id++)); do
 
   if [ "$alive" -eq 0 ]; then
     log "instance ${id}: process dead — marking unhealthy"
-    write_meta "$id" false "" "$((failures + 1))" "$last_rotate" ""
+    write_meta "$id" false "" "$((failures + 1))" "$last_rotate" "" "" false
     if [ "${SUPERVISE_RESTART:-1}" = "1" ]; then
       bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
     fi
@@ -45,15 +46,28 @@ for ((id = 0; id < N; id++)); do
   fi
 
   if ip="$(probe_instance "$id")"; then
-    write_meta "$id" true "$ip" 0 "$last_rotate" "$(cat "$pidfile")"
-    backends_json="$(echo "$backends_json" | jq -c \
-      --argjson id "$id" \
-      --arg addr "$(socks_addr "$id")" \
-      '. + [{id:$id, addr:$addr}]')"
-    log "instance ${id}: healthy v4=${ip} socks=$(socks_addr "$id")"
+    if acquire_unique_lock 10; then
+      if v4_conflicts "$id" "$ip"; then
+        release_unique_lock
+        write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
+        log "instance ${id}: v4 collision ${ip} — excluded from healthy.json"
+      else
+        write_meta "$id" true "$ip" 0 "$last_rotate" "$(cat "$pidfile")" "" true
+        release_unique_lock
+        backends_json="$(echo "$backends_json" | jq -c \
+          --argjson id "$id" \
+          --arg addr "$(socks_addr "$id")" \
+          '. + [{id:$id, addr:$addr}]')"
+        log "instance ${id}: healthy v4=${ip} unique=true socks=$(socks_addr "$id")"
+      fi
+    else
+      # lock busy (rotate committing): keep out of pool this pass
+      write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
+      log "instance ${id}: unique lock busy — skip pool this pass v4=${ip}"
+    fi
   else
     failures=$((failures + 1))
-    write_meta "$id" false "" "$failures" "$last_rotate" "$(cat "$pidfile")"
+    write_meta "$id" false "" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
     log "instance ${id}: probe fail failures=${failures}"
     if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
       log "instance ${id}: auto rotate (${ROTATE_MODE:-restart})"

@@ -12,10 +12,28 @@ WARP_CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-45}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-15}"
 NETNS_PREFIX="${NETNS_PREFIX:-wp}"
 VETH_SUBNET_BASE="${VETH_SUBNET_BASE:-10.200}"
+# SOCKS in-ns: Dockerfile sets SOCKS_BIN=microsocks; fallback gost if binary missing at runtime
+SOCKS_BIN="${SOCKS_BIN:-microsocks}"
 GOST_BIN="${GOST_BIN:-gost}"
+V4_UNIQUE="${V4_UNIQUE:-1}"
+V4_UNIQUE_RETRIES="${V4_UNIQUE_RETRIES:-3}"
+V4_UNIQUE_HARD_RETRIES="${V4_UNIQUE_HARD_RETRIES:-2}"
+V4_UNIQUE_BACKOFF="${V4_UNIQUE_BACKOFF:-5}"
+V4_UNIQUE_LOCK_TIMEOUT="${V4_UNIQUE_LOCK_TIMEOUT:-60}"
 
 log() { echo "==> [warp-pool] $*"; }
 err() { echo "==> [warp-pool][ERROR] $*" >&2; }
+
+# append timestamped line to ${DATA_DIR}/logs/warp-pool.log
+log_file() {
+  local f="${DATA_DIR}/logs/warp-pool.log"
+  mkdir -p "${DATA_DIR}/logs"
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$f"
+}
+log_event() {
+  log "$*"
+  log_file "$*" || true
+}
 
 instance_dir() { echo "${DATA_DIR}/instances/$1"; }
 instance_state_dir() { echo "$(instance_dir "$1")/state"; }
@@ -124,10 +142,18 @@ write_meta() {
   local last_rotate="${5:-}"
   local pid="${6:-}"
   local v6="${7:-}"
+  local unique="${8:-}"
   local dir meta
   dir="$(instance_dir "$id")"
   mkdir -p "$dir"
   meta="${dir}/meta.json"
+  if [ -z "$unique" ]; then
+    if [ "$healthy" = "true" ] && [ -n "$v4" ]; then
+      unique="true"
+    else
+      unique="false"
+    fi
+  fi
   jq -n \
     --argjson id "$id" \
     --argjson healthy "$healthy" \
@@ -137,18 +163,185 @@ write_meta() {
     --argjson failures "$failures" \
     --arg last_rotate "$last_rotate" \
     --arg pid "$pid" \
+    --argjson unique "$unique" \
     --argjson port "$(instance_port "$id")" \
     --argjson expose "$(expose_port "$id")" \
     --arg mode "warp" \
     --arg netns "$(ns_name "$id")" \
     --arg socks "$(socks_addr "$id")" \
     '{
-      id:$id, healthy:$healthy, v4:$v4, v6:$v6, ip:$ip,
+      id:$id, healthy:$healthy, unique:$unique, v4:$v4, v6:$v6, ip:$ip,
       failures:$failures, last_rotate:$last_rotate, pid:$pid,
       port:$port, expose:$expose, mode:$mode, netns:$netns, socks:$socks,
       updated:(now|todate)
     }' > "${meta}.tmp"
   mv "${meta}.tmp" "$meta"
+}
+
+# return 0 = conflict with another healthy instance; 1 = unique or disabled
+v4_conflicts() {
+  local id="$1"
+  local v4="$2"
+  local other_dir other_id other_meta other_healthy other_v4
+  if [ "${V4_UNIQUE}" = "0" ]; then
+    return 1
+  fi
+  if [ -z "$v4" ]; then
+    return 1
+  fi
+  for other_dir in "${DATA_DIR}/instances"/*; do
+    [ -d "$other_dir" ] || continue
+    other_id="$(basename "$other_dir")"
+    case "$other_id" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$other_id" = "$id" ] && continue
+    other_meta="${other_dir}/meta.json"
+    [ -f "$other_meta" ] || continue
+    other_healthy="$(jq -r '.healthy // false' "$other_meta" 2>/dev/null || echo false)"
+    [ "$other_healthy" = "true" ] || continue
+    other_v4="$(jq -r '.v4 // empty' "$other_meta" 2>/dev/null || true)"
+    if [ -n "$other_v4" ] && [ "$other_v4" = "$v4" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+acquire_unique_lock() {
+  local lock="${PID_DIR}/v4-unique.lock"
+  local timeout="${1:-$V4_UNIQUE_LOCK_TIMEOUT}"
+  local elapsed=0
+  mkdir -p "${PID_DIR}"
+  while ! mkdir "$lock" 2>/dev/null; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      err "v4 unique lock timeout (${timeout}s)"
+      return 1
+    fi
+  done
+  echo $$ > "${lock}/pid" 2>/dev/null || true
+  return 0
+}
+
+release_unique_lock() {
+  rm -rf "${PID_DIR}/v4-unique.lock"
+}
+
+# commit healthy only if v4 unique among healthy peers (holds global lock)
+# usage: commit_if_unique id v4 [failures] [last_rotate] [pid] [v6]
+# return 0 committed; 1 conflict or lock fail
+commit_if_unique() {
+  local id="$1"
+  local v4="$2"
+  local failures="${3:-0}"
+  local last_rotate="${4:-}"
+  local pid="${5:-}"
+  local v6="${6:-}"
+  if ! acquire_unique_lock; then
+    return 1
+  fi
+  if v4_conflicts "$id" "$v4"; then
+    release_unique_lock
+    return 1
+  fi
+  write_meta "$id" true "$v4" "$failures" "$last_rotate" "$pid" "$v6" true
+  release_unique_lock
+  return 0
+}
+
+# boot/ready helper: probe then ensure unique via restart then hard (COOLDOWN=0)
+# return 0 if unique healthy; 1 otherwise. echoes v4 on success.
+ensure_instance_unique() {
+  local id="$1"
+  local ip="" ok=0 attempt=0
+  local max_restart="${V4_UNIQUE_RETRIES}"
+  local max_hard="${V4_UNIQUE_HARD_RETRIES}"
+  local backoff="${V4_UNIQUE_BACKOFF}"
+  local ts pid
+
+  if [ "${V4_UNIQUE}" = "0" ]; then
+    if ip="$(probe_instance "$id")"; then
+      write_meta "$id" true "$ip" 0 "" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" true
+      echo "$ip"
+      return 0
+    fi
+    return 1
+  fi
+
+  if ip="$(probe_instance "$id")"; then
+    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
+    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
+      echo "$ip"
+      return 0
+    fi
+    log "instance ${id}: v4 collision ${ip} at boot — retry uniqueness"
+  else
+    return 1
+  fi
+
+  export SUPERVISE_RESTART=0
+  attempt=0
+  while [ "$attempt" -lt "$max_restart" ]; do
+    attempt=$((attempt + 1))
+    log "instance ${id}: unique restart attempt ${attempt}/${max_restart} after v4=${ip}"
+    sleep "$backoff"
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
+    bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
+    bash "${SCRIPTS_DIR}/start-instance.sh" "$id"
+    sleep 5
+    ok=0
+    ip=""
+    for _ in 1 2 3 4 5 6 7 8; do
+      if ip="$(probe_instance "$id")"; then
+        ok=1
+        break
+      fi
+      sleep 3
+    done
+    [ "$ok" = 1 ] || continue
+    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
+    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
+      echo "$ip"
+      return 0
+    fi
+    log "instance ${id}: v4 collision ${ip} (restart attempt ${attempt})"
+  done
+
+  attempt=0
+  while [ "$attempt" -lt "$max_hard" ]; do
+    attempt=$((attempt + 1))
+    log "instance ${id}: unique hard attempt ${attempt}/${max_hard}"
+    sleep "$backoff"
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
+    rm -rf "$(instance_state_dir "$id")"
+    mkdir -p "$(instance_state_dir "$id")"
+    bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
+    bash "${SCRIPTS_DIR}/start-instance.sh" "$id"
+    sleep 5
+    ok=0
+    ip=""
+    for _ in 1 2 3 4 5 6 7 8; do
+      if ip="$(probe_instance "$id")"; then
+        ok=1
+        break
+      fi
+      sleep 3
+    done
+    [ "$ok" = 1 ] || continue
+    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
+    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
+      echo "$ip"
+      return 0
+    fi
+    log "instance ${id}: v4 collision ${ip} (hard attempt ${attempt})"
+  done
+
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_meta "$id" false "${ip:-}" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
+  err "instance ${id}: v4_collision exhausted at boot v4=${ip:-}"
+  return 1
 }
 
 # Probe via in-ns SOCKS (gost); force IPv4 for pool health

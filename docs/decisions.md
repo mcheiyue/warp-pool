@@ -119,3 +119,14 @@
   4. 权限：`NET_ADMIN` + `SYS_ADMIN` + `/dev/net/tun`；root entrypoint。
 - **Consequences:** 废弃「默认无 cap / proxy multi」叙事；v0.2 镜像逻辑 superseded；内存 ~80–110MiB×N；详见 `docs/pivot-v0.3.md`。
 
+## ADR-016: v0.4 互异保证、热配置、microsocks
+
+- **Status:** Accepted (2026-08-07)
+- **Context:** v0.3 可用但 CF 不保证 restart 后池内 v4 互异；需热改 cooldown/N；gost 偏重且 arm64 包不全。
+- **Decision:**
+  1. **V4_UNIQUE=1**（默认）：rotate/boot 后 `v4_conflicts` + 全局锁；冲突则 restart 重试再 hard；仅 unique+healthy 入 `healthy.json`；API 耗尽返回 **409** + `reason=v4_collision`。
+  2. **热配置：** `GET/PUT /config` 白名单写 `runtime-config.json` + `os.Setenv`；`POST/DELETE /instances` 写 `desired_n` / `remove-id`；entrypoint 监督循环热加/热删（宿主机端口须预 publish）。
+  3. **SOCKS：** 默认 **microsocks**（多 arch）；gost 作 fallback。
+  4. **降权：** 默认仍 privileged；`docker-compose.caps.yml` / `deploy/compose-caps.yml` 为 caps 探针。
+- **Consequences:** rotate 可能更慢；hard 注册有限频风险；热加不能突破未映射端口。详见 `docs/pivot-v0.4.md`。
+

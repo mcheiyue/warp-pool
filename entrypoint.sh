@@ -34,12 +34,27 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-mkdir -p /run "${PID_DIR}" "${DATA_DIR}/instances" "${DATA_DIR}/state"
+mkdir -p /run "${PID_DIR}" "${DATA_DIR}/instances" "${DATA_DIR}/state" "${DATA_DIR}/logs"
 # fix /run/netns for container restart (stale mount after docker restart)
 umount -l /run/netns 2>/dev/null || true
 rm -rf /run/netns/*
 mkdir -p /run/netns
 mount --make-shared /run/netns 2>/dev/null || true
+# 启动兜底：清掉残留 netns(wp*) / veth(vwp*)，避免 RTNETLINK 复发
+NETNS_PREFIX="${NETNS_PREFIX:-wp}"
+if command -v ip >/dev/null 2>&1; then
+  while read -r ns _; do
+    case "$ns" in
+      "${NETNS_PREFIX}"*) ip netns del "$ns" 2>/dev/null || true ;;
+    esac
+  done < <(ip netns list 2>/dev/null || true)
+  # ip -o link: "N: name: <flags> ..."
+  while read -r iface; do
+    case "$iface" in
+      "v${NETNS_PREFIX}"*) ip link del "$iface" 2>/dev/null || true ;;
+    esac
+  done < <(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' || true)
+fi
 ensure_host_forward
 
 if [ "$ENABLE_CONTROL" = "1" ]; then
@@ -90,19 +105,26 @@ for ((id = 0; id < WARP_INSTANCES; id++)); do
 
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
     ready=0
+    probed=0
     for ((t = 0; t < BOOT_HEALTH_WAIT; t += 3)); do
-      if ip="$(probe_instance "$id")"; then
-        write_meta "$id" true "$ip" 0 "" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-        log "instance ${id}: ready v4=${ip}"
-        ready=1
+      if probe_instance "$id" >/dev/null; then
+        probed=1
         break
       fi
       sleep 3
     done
+    if [ "$probed" = "1" ]; then
+      if ip="$(ensure_instance_unique "$id")"; then
+        log "instance ${id}: ready v4=${ip} unique=true"
+        ready=1
+      else
+        err "instance ${id}: healthy probe but v4_collision (not ready)"
+      fi
+    fi
     if [ "$ready" = "1" ]; then
       started=$((started + 1))
     else
-      err "instance ${id}: started but not healthy within ${BOOT_HEALTH_WAIT}s"
+      err "instance ${id}: started but not healthy/unique within ${BOOT_HEALTH_WAIT}s"
       if [ "$PARTIAL_REGISTER_POLICY" = "fail" ]; then
         exit 1
       fi
@@ -148,11 +170,51 @@ if [ "$ENABLE_CONTROL" = "1" ]; then
   log "control+ui pid=$! on ${CONTROL_BIND}:${CONTROL_PORT} web=${WEB_ROOT}"
 fi
 
+# hot desired N from control API (POST /instances → state/desired_n.json)
+_read_desired_n() {
+  local f="${DATA_DIR}/state/desired_n.json" n=""
+  if [ -f "$f" ]; then
+    n="$(jq -r '.desired // .n // empty' "$f" 2>/dev/null || true)"
+  fi
+  if [ -n "$n" ] && [ "$n" -ge 1 ] 2>/dev/null; then
+    echo "$n"
+  else
+    echo "${WARP_INSTANCES}"
+  fi
+}
+
 log "supervising..."
 while true; do
+  # align WARP_INSTANCES with desired_n (hot add)
+  desired="$(_read_desired_n)"
+  if [ "$desired" -gt "$WARP_INSTANCES" ] 2>/dev/null; then
+    for ((id = WARP_INSTANCES; id < desired; id++)); do
+      log "hot-add instance ${id} (desired=${desired})"
+      if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
+        if ip="$(ensure_instance_unique "$id" 2>/dev/null)"; then
+          log "hot-add ${id}: ready v4=${ip}"
+        else
+          err "hot-add ${id}: start ok but not unique/healthy yet"
+        fi
+      fi
+    done
+    WARP_INSTANCES="$desired"
+    export WARP_INSTANCES
+  fi
+
+  # process remove-id from DELETE /instances
+  if [ -f "${DATA_DIR}/state/remove-id" ]; then
+    rid="$(tr -d ' \n\r' < "${DATA_DIR}/state/remove-id" || true)"
+    rm -f "${DATA_DIR}/state/remove-id"
+    if [ -n "$rid" ] && [ "$rid" -ge 0 ] 2>/dev/null; then
+      log "hot-remove instance ${rid}"
+      bash "${SCRIPTS_DIR}/stop-instance.sh" "$rid" drop-netns 2>/dev/null || true
+      bash "${SCRIPTS_DIR}/health-once.sh" || true
+    fi
+  fi
+
   alive=0
   for ((id = 0; id < WARP_INSTANCES; id++)); do
-    # skip while rotate lock held
     if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
       alive=$((alive + 1))
       continue

@@ -1,0 +1,33 @@
+# Caps-only try (no privileged). If netns fails, fall back to docker-compose.yml (privileged).
+# Usage: docker compose -f deploy/compose-caps.yml up -d
+services:
+  warp-pool:
+    image: ${WARP_POOL_IMAGE:-ghcr.io/mcheiyue/warp-pool:latest}
+    build: ..
+    container_name: warp-pool-caps
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+    environment:
+      WARP_INSTANCES: "${WARP_INSTANCES:-2}"
+      ROTATE_MODE: "${ROTATE_MODE:-restart}"
+      CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
+      CONTROL_TOKEN: "${CONTROL_TOKEN:-}"
+      SOCKS_BIN: "${SOCKS_BIN:-microsocks}"
+      V4_UNIQUE: "${V4_UNIQUE:-1}"
+    volumes:
+      - warp-pool-caps-data:/data
+    ports:
+      - "127.0.0.1:1080:1080"
+      - "127.0.0.1:11000-11009:11000-11009"
+    mem_limit: 512m
+
+volumes:
+  warp-pool-caps-data:

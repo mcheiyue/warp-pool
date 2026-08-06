@@ -69,6 +69,14 @@
 - 热减实例默认 **不** deregister（与 `DEREGISTER_ON_SHUTDOWN` 对齐可配）。  
 - API 草案：`POST /instances`（add）、`DELETE /instances?id=`、`GET /config`、`PUT /config`（字段白名单）。
 
+#### 热配置：端口 publish 上限（D3）
+
+容器启动后 **无法** 再向宿主机新增 `-p` 映射。热增实例只能占用 compose 已预 publish 的 `EXPOSE_PORT_BASE`…`+N`（默认 `11000-1100N`）。未预留端口时：可热建 netns/WARP 并入聚合 `:1080`，但直连 expose 口不可用。运维：按最大预期 N 写死端口范围，或只用聚合口。
+
+#### expose-merge 决策（B4）
+
+v0.4 **不做**「多个 warppool expose 进程合并为单进程多路」。每路 expose 仅数 MB，合并省内存有限，却要改 warppool 监听模型与故障隔离，风险高于收益。除非日后实现 trivial 到可单文件落地，否则保持一实例一 expose。
+
 ### WP-E v4 互异保证（见 §4，核心新需求）
 
 ## 4. 单实例 rotate 后仍保证池内 v4 互异

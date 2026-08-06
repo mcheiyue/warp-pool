@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-instance.sh <id> — Warp mode inside netns + gost SOCKS + optional expose
+# start-instance.sh <id> — Warp mode inside netns + SOCKS (microsocks|gost) + optional expose
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -79,7 +79,8 @@ wcli "$id" connect
 wcli "$id" debug qlog disable 2>/dev/null || true
 wait_daemon_ready "$id" 90 || log "instance ${id}: still not Connected (probe will decide)"
 
-# gost SOCKS inside ns — traffic follows CloudflareWARP default route
+# SOCKS inside ns — traffic follows CloudflareWARP default route
+# Prefer microsocks if present (SOCKS_BIN=microsocks); else gost
 if [ -f "$pf_gost" ]; then
   gpid="$(cat "$pf_gost" || true)"
   if [ -n "$gpid" ] && kill -0 "$gpid" 2>/dev/null; then
@@ -88,11 +89,19 @@ if [ -f "$pf_gost" ]; then
   fi
   rm -f "$pf_gost"
 fi
-log "instance ${id}: gost socks5 0.0.0.0:${port} in ns (reach via $(socks_addr "$id"))"
-ns_exec "$id" bash -c "
-  '$GOST_BIN' -L 'socks5://0.0.0.0:${port}' >/tmp/gost-${id}.log 2>&1 &
-  echo \$! > '$pf_gost'
-"
+if command -v microsocks >/dev/null 2>&1; then
+  log "instance ${id}: microsocks 0.0.0.0:${port} in ns (reach via $(socks_addr "$id"))"
+  ns_exec "$id" bash -c "
+    microsocks -i 0.0.0.0 -p ${port} >/tmp/microsocks-${id}.log 2>&1 &
+    echo \$! > '$pf_gost'
+  "
+else
+  log "instance ${id}: gost socks5 0.0.0.0:${port} in ns (reach via $(socks_addr "$id"))"
+  ns_exec "$id" bash -c "
+    '${GOST_BIN}' -L 'socks5://0.0.0.0:${port}' >/tmp/gost-${id}.log 2>&1 &
+    echo \$! > '$pf_gost'
+  "
+fi
 sleep 1
 
 # expose host 0.0.0.0:11000+id -> ns peer socks
@@ -114,4 +123,4 @@ if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
   disown $! 2>/dev/null || true
 fi
 
-log "instance ${id}: warp+gost up pid=$(cat "$pf_svc") socks=$(socks_addr "$id")"
+log "instance ${id}: warp+socks up pid=$(cat "$pf_svc") socks=$(socks_addr "$id")"
