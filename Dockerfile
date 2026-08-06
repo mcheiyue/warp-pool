@@ -35,13 +35,9 @@ RUN set -eux; \
   rm -rf /var/lib/apt/lists/*; \
   mkdir -p /opt/warp-pool/web /data/instances /run/warp-pool /root/.local/share/warp; \
   echo -n yes > /root/.local/share/warp/accepted-tos.txt; \
-  case "${TARGETARCH}" in \
-    amd64) GOST_ARCH=amd64 ;; \
-    arm64) GOST_ARCH=arm64 ;; \
-    *) echo "unsupported arch: ${TARGETARCH}"; exit 1 ;; \
-  esac; \
+  GOST_ARCH=amd64; \
   curl -fsSL -o /tmp/gost.gz \
-    "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-${GOST_ARCH}-${GOST_VERSION}.gz"; \
+    "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-amd64-${GOST_VERSION}.gz"; \
   gunzip -c /tmp/gost.gz > /usr/local/bin/gost; \
   chmod +x /usr/local/bin/gost; \
   rm -f /tmp/gost.gz
@@ -54,7 +50,6 @@ COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /usr/local/bin/gost \
       /opt/warp-pool/scripts/*.sh
 
-# v0.3 needs root for netns / iptables / tun
 USER root
 
 ENV DATA_DIR=/data \
