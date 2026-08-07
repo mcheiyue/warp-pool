@@ -45,13 +45,16 @@ RUN set -eux; \
   rm -rf /var/lib/apt/lists/*; \
   mkdir -p /opt/warp-pool/web /data/instances /run/warp-pool /root/.local/share/warp; \
   echo -n yes > /root/.local/share/warp/accepted-tos.txt; \
-  # gost kept as fallback (amd64 only for now; multi-arch later)
-  GOST_ARCH=amd64; \
-  curl -fsSL -o /tmp/gost.gz \
-    "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-amd64-${GOST_VERSION}.gz"; \
-  gunzip -c /tmp/gost.gz > /usr/local/bin/gost; \
-  chmod +x /usr/local/bin/gost; \
-  rm -f /tmp/gost.gz
+  # gost fallback: only on amd64 (release assets lack reliable arm64 for 2.11.5)
+  if [ "${TARGETARCH}" = "amd64" ] || [ -z "${TARGETARCH}" ]; then \
+    curl -fsSL -o /tmp/gost.gz \
+      "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-amd64-${GOST_VERSION}.gz"; \
+    gunzip -c /tmp/gost.gz > /usr/local/bin/gost; \
+    chmod +x /usr/local/bin/gost; \
+    rm -f /tmp/gost.gz; \
+  else \
+    echo "skip gost on arch=${TARGETARCH} (use microsocks)"; \
+  fi
 
 COPY --from=warppool-build /warppool /usr/local/bin/warppool
 COPY scripts/ /opt/warp-pool/scripts/

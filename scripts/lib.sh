@@ -12,8 +12,8 @@ WARP_CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-45}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-15}"
 NETNS_PREFIX="${NETNS_PREFIX:-wp}"
 VETH_SUBNET_BASE="${VETH_SUBNET_BASE:-10.200}"
-# SOCKS in-ns: Dockerfile sets SOCKS_BIN=microsocks; fallback gost if binary missing at runtime
-SOCKS_BIN="${SOCKS_BIN:-microsocks}"
+# SOCKS_BIN=microsocks preferred (Dockerfile); gost fallback if binary missing
+SOCKS_BIN="${SOCKS_BIN:-gost}"
 GOST_BIN="${GOST_BIN:-gost}"
 V4_UNIQUE="${V4_UNIQUE:-1}"
 V4_UNIQUE_RETRIES="${V4_UNIQUE_RETRIES:-3}"
@@ -344,7 +344,7 @@ ensure_instance_unique() {
   return 1
 }
 
-# Probe via in-ns SOCKS (gost); force IPv4 for pool health
+# Probe via in-ns SOCKS (microsocks|gost); force IPv4 for pool health
 probe_instance() {
   local id="$1"
   local addr out warp ip

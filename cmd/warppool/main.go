@@ -781,7 +781,7 @@ func handlePostInstances(w http.ResponseWriter, r *http.Request, data string) {
 	writeJSON(w, map[string]any{
 		"ok":      true,
 		"desired": want,
-		"note":    "supervisor pending",
+		"note":    "entrypoint supervisor will hot-add up to desired (ports must be pre-published)",
 	})
 }
 
