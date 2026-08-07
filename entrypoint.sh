@@ -183,38 +183,111 @@ _read_desired_n() {
   fi
 }
 
+# instance dirs under /data/instances/<id> are source of truth (DELETE removes dir)
+_count_instance_dirs() {
+  local n=0 d
+  for d in "${DATA_DIR}/instances"/*; do
+    [ -d "$d" ] || continue
+    [[ "$(basename "$d")" =~ ^[0-9]+$ ]] || continue
+    n=$((n + 1))
+  done
+  echo "$n"
+}
+
+_max_instance_id() {
+  local max=-1 id
+  for d in "${DATA_DIR}/instances"/*; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    if [ "$id" -gt "$max" ]; then max="$id"; fi
+  done
+  echo "$max"
+}
+
+_next_free_id() {
+  local id=0
+  while [ -d "${DATA_DIR}/instances/${id}" ]; do
+    id=$((id + 1))
+  done
+  echo "$id"
+}
+
 log "supervising..."
 while true; do
-  # align WARP_INSTANCES with desired_n (hot add)
   desired="$(_read_desired_n)"
-  if [ "$desired" -gt "$WARP_INSTANCES" ] 2>/dev/null; then
-    for ((id = WARP_INSTANCES; id < desired; id++)); do
-      log "hot-add instance ${id} (desired=${desired})"
+  cur="$(_count_instance_dirs)"
+
+  # legacy remove-id (API now removes directly; keep for race/compat)
+  if [ -f "${DATA_DIR}/state/remove-id" ]; then
+    rid="$(tr -d ' \n\r' < "${DATA_DIR}/state/remove-id" || true)"
+    rm -f "${DATA_DIR}/state/remove-id"
+    if [ -n "$rid" ] && [ "$rid" -ge 0 ] 2>/dev/null; then
+      log "hot-remove instance ${rid}"
+      if [ -x "${SCRIPTS_DIR}/remove-instance.sh" ]; then
+        bash "${SCRIPTS_DIR}/remove-instance.sh" "$rid" 2>/dev/null || true
+      else
+        SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/stop-instance.sh" "$rid" drop-netns 2>/dev/null || true
+        rm -rf "${DATA_DIR}/instances/${rid}"
+      fi
+      cur="$(_count_instance_dirs)"
+      SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+    fi
+  fi
+
+  # shrink: if more dirs than desired, remove highest ids
+  if [ "$desired" -ge 1 ] 2>/dev/null && [ "$cur" -gt "$desired" ] 2>/dev/null; then
+    while [ "$(_count_instance_dirs)" -gt "$desired" ]; do
+      hid="$(_max_instance_id)"
+      [ "$hid" -ge 0 ] 2>/dev/null || break
+      log "hot-shrink remove instance ${hid} (desired=${desired})"
+      if [ -x "${SCRIPTS_DIR}/remove-instance.sh" ]; then
+        bash "${SCRIPTS_DIR}/remove-instance.sh" "$hid" 2>/dev/null || true
+      else
+        SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/stop-instance.sh" "$hid" drop-netns 2>/dev/null || true
+        rm -rf "${DATA_DIR}/instances/${hid}"
+      fi
+    done
+    cur="$(_count_instance_dirs)"
+  fi
+
+  # hot-add until dir count == desired (reuse free ids)
+  if [ "$desired" -ge 1 ] 2>/dev/null && [ "$cur" -lt "$desired" ] 2>/dev/null; then
+    while [ "$(_count_instance_dirs)" -lt "$desired" ]; do
+      id="$(_next_free_id)"
+      log "hot-add instance ${id} (have=$(_count_instance_dirs) desired=${desired})"
       if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
         if ip="$(ensure_instance_unique "$id" 2>/dev/null)"; then
           log "hot-add ${id}: ready v4=${ip}"
         else
           err "hot-add ${id}: start ok but not unique/healthy yet"
         fi
+      else
+        err "hot-add ${id}: failed to start"
+        break
       fi
     done
+  fi
+
+  cur="$(_count_instance_dirs)"
+  maxid="$(_max_instance_id)"
+  if [ "$maxid" -ge 0 ] 2>/dev/null; then
+    WARP_INSTANCES=$((maxid + 1))
+  else
+    WARP_INSTANCES=0
+  fi
+  # health-once loops 0..N-1; keep N at least desired for empty holes skip
+  if [ "$desired" -gt "$WARP_INSTANCES" ] 2>/dev/null; then
     WARP_INSTANCES="$desired"
-    export WARP_INSTANCES
   fi
+  export WARP_INSTANCES
 
-  # process remove-id from DELETE /instances
-  if [ -f "${DATA_DIR}/state/remove-id" ]; then
-    rid="$(tr -d ' \n\r' < "${DATA_DIR}/state/remove-id" || true)"
-    rm -f "${DATA_DIR}/state/remove-id"
-    if [ -n "$rid" ] && [ "$rid" -ge 0 ] 2>/dev/null; then
-      log "hot-remove instance ${rid}"
-      bash "${SCRIPTS_DIR}/stop-instance.sh" "$rid" drop-netns 2>/dev/null || true
-      bash "${SCRIPTS_DIR}/health-once.sh" || true
-    fi
-  fi
-
+  # restart only ids that still have a data dir (deleted = no revive)
   alive=0
-  for ((id = 0; id < WARP_INSTANCES; id++)); do
+  for d in "${DATA_DIR}/instances"/*; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
     if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
       alive=$((alive + 1))
       continue
@@ -224,17 +297,18 @@ while true; do
       pid="$(cat "$pf" || true)"
       if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         alive=$((alive + 1))
-      else
-        log "instance ${id}: dead, restarting"
-        bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
-        if [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null || true)" 2>/dev/null; then
-          alive=$((alive + 1))
-        fi
+        continue
       fi
     fi
+    log "instance ${id}: dead, restarting"
+    bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
+    if [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null || true)" 2>/dev/null; then
+      alive=$((alive + 1))
+    fi
   done
-  if [ "$alive" -lt 1 ]; then
-    err "all warp-svc processes dead"
+
+  if [ "$alive" -lt 1 ] && [ "$desired" -ge 1 ] 2>/dev/null; then
+    err "all warp-svc processes dead (desired=${desired})"
     exit 1
   fi
   sleep 5

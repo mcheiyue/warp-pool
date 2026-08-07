@@ -766,12 +766,16 @@ func handlePostInstances(w http.ResponseWriter, r *http.Request, data string) {
 			}
 		}
 	}
-	cur := len(readInstances(data))
+	// cur = live dirs only (deleted instances remove their dir)
+	cur := countInstanceDirs(data)
 	if dn, err := readDesiredN(data); err == nil && dn > cur {
 		cur = dn
 	}
 	if want <= 0 {
 		want = cur + 1
+	}
+	if want < 1 {
+		want = 1
 	}
 	if err := writeDesiredN(data, want); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -781,7 +785,8 @@ func handlePostInstances(w http.ResponseWriter, r *http.Request, data string) {
 	writeJSON(w, map[string]any{
 		"ok":      true,
 		"desired": want,
-		"note":    "entrypoint supervisor will hot-add up to desired (ports must be pre-published)",
+		"current": cur,
+		"note":    "entrypoint supervisor will hot-add up to desired (ports must be pre-published for direct expose)",
 	})
 }
 
@@ -795,28 +800,75 @@ func handleDeleteInstance(w http.ResponseWriter, r *http.Request, data, scripts 
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	// mark for removal (supervisor can consume later)
 	_ = os.MkdirAll(filepath.Join(data, "state"), 0o755)
-	_ = os.WriteFile(filepath.Join(data, "state", "remove-id"), []byte(id+"\n"), 0o644)
 
-	script := filepath.Join(scripts, "stop-instance.sh")
+	// full remove: stop + drop-netns + rm instance dir (no API/UI residue)
+	script := filepath.Join(scripts, "remove-instance.sh")
+	if _, err := os.Stat(script); err != nil {
+		// fallback older images
+		script = filepath.Join(scripts, "stop-instance.sh")
+	}
 	cmd := exec.Command("/bin/bash", script, id)
-	cmd.Env = os.Environ()
+	if filepath.Base(script) == "stop-instance.sh" {
+		cmd = exec.Command("/bin/bash", script, id, "drop-netns")
+	}
+	cmd.Env = append(os.Environ(), "SUPERVISE_RESTART=0")
 	out, err := cmd.CombinedOutput()
+	// always try wipe dir if stop path left it
+	_ = os.RemoveAll(filepath.Join(data, "instances", id))
+
+	left := countInstanceDirs(data)
+	if left < 1 {
+		left = 0
+	}
+	_ = writeDesiredN(data, left)
+	_ = os.Setenv("WARP_INSTANCES", strconv.Itoa(max(left, 1)))
+
+	// tell supervisor not to revive this id (best-effort; dir gone is source of truth)
+	_ = os.Remove(filepath.Join(data, "state", "remove-id"))
+
 	if err != nil {
-		// still recorded remove-id; surface script failure
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, map[string]any{
-			"ok": false, "id": id, "remove_marked": true,
+			"ok": false, "id": id, "desired": left,
 			"error": err.Error(), "output": string(out),
 		})
 		return
 	}
-	// lower desired if present
-	if dn, err := readDesiredN(data); err == nil && dn > 0 {
-		_ = writeDesiredN(data, dn-1)
+	// refresh healthy.json without restarting anything
+	hc := exec.Command("/bin/bash", filepath.Join(scripts, "health-once.sh"))
+	hc.Env = append(os.Environ(), "SUPERVISE_RESTART=0", "WARP_INSTANCES="+strconv.Itoa(max(left, 1)))
+	_, _ = hc.CombinedOutput()
+
+	writeJSON(w, map[string]any{
+		"ok": true, "id": id, "removed": true, "desired": left,
+		"output": string(out),
+	})
+}
+
+func countInstanceDirs(data string) int {
+	dir := filepath.Join(data, "instances")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
 	}
-	writeJSON(w, map[string]any{"ok": true, "id": id, "stopped": true, "output": string(out)})
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := strconv.Atoi(e.Name()); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func readDesiredN(data string) (int, error) {
