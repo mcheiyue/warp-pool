@@ -3,199 +3,589 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>warppool</title>
+  <title>WARP 出口池 · warppool</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #0f0f13; color: #e0e0e0; min-height: 100vh; }
-    .app { max-width: 720px; margin: 0 auto; padding: 32px 16px; }
-    .header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-    .header h1 { font-size: 1.6rem; font-weight: 700; color: #f0f0f0; }
-    .header .tag { font-size: 0.75rem; color: #888; background: #1a1a24; padding: 2px 10px; border-radius: 999px; }
-    .header .btn { margin-left: auto; background: none; border: 1px solid #333; color: #aaa; font-size: 0.85rem; padding: 4px 14px; border-radius: 8px; cursor: pointer; }
-    .header .btn:hover { background: #1e1e2a; color: #fff; }
-    .header .btn.primary { border-color: #22c55e; color: #22c55e; }
-    .card { background: #17171f; border-radius: 14px; margin-bottom: 10px; }
-    .card-body { padding: 16px 20px; display: flex; align-items: center; gap: 12px; }
-    .card .id { font-weight: 600; font-size: 1.1rem; color: #888; min-width: 28px; }
-    .card .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .card .dot.ok { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.4); }
-    .card .dot.fail { background: #ef4444; }
-    .card .info { flex: 1; min-width: 0; }
-    .card .v4 { font-size: 1.05rem; font-weight: 600; color: #22c55e; font-variant-numeric: tabular-nums; }
-    .card .v6 { font-size: 0.8rem; color: #818cf8; margin-top: 2px; word-break: break-all; }
-    .card .meta { font-size: 0.75rem; color: #666; margin-top: 4px; }
-    .card .rotate-btn { background: none; border: 1px solid #333; color: #aaa; font-size: 0.8rem; padding: 6px 14px; border-radius: 8px; cursor: pointer; }
-    .card .rotate-btn:hover { border-color: #22c55e; color: #22c55e; }
-    .card .rotate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    .agg { margin-top: 16px; padding: 14px 20px; background: #17171f; border-radius: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-    .agg .label { font-size: 0.8rem; color: #666; }
-    .agg .port { font-size: 1.1rem; font-weight: 600; color: #f0f0f0; }
-    .msg { text-align: center; padding: 40px 20px; color: #888; }
-    .auth { background: #17171f; border-radius: 14px; padding: 24px; margin-bottom: 16px; }
-    .auth label { display: block; font-size: 0.85rem; color: #888; margin-bottom: 8px; }
-    .auth input { width: 100%; background: #0f0f13; border: 1px solid #333; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
-    .auth button { background: #22c55e; border: none; color: #0f0f13; font-weight: 600; padding: 10px 20px; border-radius: 8px; cursor: pointer; }
-    .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1e1e2a; color: #ccc; padding: 10px 24px; border-radius: 10px; font-size: 0.85rem; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100; }
+    :root {
+      --bg: #0c0c10;
+      --panel: #14141c;
+      --panel2: #1a1a24;
+      --border: #2a2a36;
+      --text: #e8e8ef;
+      --muted: #8b8b9a;
+      --green: #22c55e;
+      --red: #ef4444;
+      --blue: #818cf8;
+      --amber: #f59e0b;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 28px 16px 48px; }
+    header.app-head {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px;
+    }
+    header h1 { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; }
+    .badge {
+      font-size: 0.72rem; color: var(--muted); background: var(--panel2);
+      padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
+    }
+    .head-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn {
+      background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+      font-size: 0.85rem; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+      transition: border-color .15s, background .15s, opacity .15s;
+    }
+    .btn:hover { border-color: #444; background: #22222e; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-primary { border-color: #166534; color: #bbf7d0; background: rgba(34,197,94,.12); }
+    .btn-primary:hover { border-color: var(--green); }
+    .btn-danger { border-color: #7f1d1d; color: #fecaca; background: rgba(239,68,68,.1); }
+    .btn-danger:hover { border-color: var(--red); }
+    .btn-ghost { color: var(--muted); }
+    .btn-sm { padding: 5px 10px; font-size: 0.8rem; }
+
+    .stats {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 16px;
+    }
+    .stat {
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+    .stat .k { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+    .stat .v { font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .stat .v.ok { color: var(--green); }
+    .stat .v.warn { color: var(--amber); }
+    .stat .v.bad { color: var(--red); }
+
+    .panel {
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px 18px; margin-bottom: 14px;
+    }
+    .panel h2 {
+      font-size: 0.95rem; font-weight: 600; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .panel h2 span.sub { font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+
+    .auth-box label, .cfg label {
+      display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 6px;
+    }
+    .auth-box input, .cfg input, .cfg select {
+      width: 100%; max-width: 360px; background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); padding: 10px 12px; border-radius: 8px; font-size: 0.95rem;
+    }
+    .auth-box .row, .cfg .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+    .auth-box .hint, .cfg .hint { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+    .token-mask { font-family: ui-monospace, monospace; color: var(--muted); font-size: 0.85rem; }
+
+    .card {
+      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; margin-bottom: 10px; display: flex; gap: 12px; align-items: flex-start;
+    }
+    .card .id {
+      width: 36px; height: 36px; border-radius: 8px; background: var(--bg);
+      display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted);
+      flex-shrink: 0;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 13px; flex-shrink: 0; }
+    .dot.on { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,.45); }
+    .dot.off { background: var(--red); }
+    .info { flex: 1; min-width: 0; }
+    .v4 { font-size: 1.1rem; font-weight: 650; color: var(--green); font-variant-numeric: tabular-nums; }
+    .v6 { font-size: 0.8rem; color: var(--blue); margin-top: 2px; word-break: break-all; }
+    .meta { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+    .actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+    .empty { text-align: center; padding: 36px 16px; color: var(--muted); }
+
+    .cfg-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;
+    }
+    .cfg-grid .field label { margin-bottom: 4px; }
+    .cfg-grid .field input, .cfg-grid .field select { max-width: none; }
+
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: #1e1e2a; border: 1px solid var(--border); color: var(--text);
+      padding: 10px 22px; border-radius: 10px; font-size: 0.88rem; opacity: 0;
+      transition: opacity .25s; pointer-events: none; z-index: 50; max-width: 90vw;
+    }
     .toast.show { opacity: 1; }
+    .toast.err { border-color: #7f1d1d; color: #fecaca; }
+
+    .modal-bg {
+      position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+      align-items: center; justify-content: center; z-index: 40; padding: 16px;
+    }
+    .modal-bg.show { display: flex; }
+    .modal {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      padding: 22px; max-width: 400px; width: 100%;
+    }
+    .modal h3 { font-size: 1.05rem; margin-bottom: 8px; }
+    .modal p { color: var(--muted); font-size: 0.9rem; margin-bottom: 16px; }
+    .modal .btns { display: flex; gap: 8px; justify-content: flex-end; }
+
+    footer.foot { margin-top: 20px; font-size: 0.75rem; color: var(--muted); text-align: center; }
   </style>
 </head>
 <body>
-  <div class="app">
-    <div class="header">
-      <h1>warppool</h1>
-      <span class="tag">v0.4</span>
-      <button class="btn" type="button" onclick="load()">↻ 刷新</button>
-      <button class="btn primary" type="button" onclick="rotateAll()">全部旋转</button>
+  <div class="wrap">
+    <header class="app-head">
+      <h1>WARP 出口池</h1>
+      <span class="badge">v0.4 · warppool</span>
+      <div class="head-actions">
+        <button type="button" class="btn btn-ghost" id="btn-refresh">刷新</button>
+        <button type="button" class="btn btn-primary" id="btn-rotate-all">全部旋转</button>
+        <button type="button" class="btn btn-ghost" id="btn-logout" title="清除本机令牌">退出登录</button>
+      </div>
+    </header>
+
+    <div id="auth-panel" class="panel" style="display:none">
+      <h2>管理令牌 <span class="sub">仅保存在本机浏览器，请求走 Authorization 头</span></h2>
+      <div class="auth-box">
+        <label for="token-input">CONTROL_TOKEN</label>
+        <div class="row">
+          <input id="token-input" type="password" placeholder="输入管理令牌" autocomplete="current-password" spellcheck="false">
+          <button type="button" class="btn btn-primary" id="btn-save-token">登录</button>
+        </div>
+        <p class="hint">令牌不会写进地址栏，避免历史记录与访问日志泄露。公网域名务必使用强令牌。</p>
+      </div>
     </div>
-    <div id="auth" class="auth" style="display:none">
-      <label>CONTROL_TOKEN</label>
-      <input id="token-input" type="password" placeholder="输入 token" autocomplete="off">
-      <button type="button" onclick="saveToken()">保存并加载</button>
+
+    <div id="main" style="display:none">
+      <div class="stats">
+        <div class="stat"><div class="k">池状态</div><div class="v" id="st-status">—</div></div>
+        <div class="stat"><div class="k">健康实例</div><div class="v" id="st-health">—</div></div>
+        <div class="stat"><div class="k">聚合端口</div><div class="v">:1080</div></div>
+        <div class="stat"><div class="k">冷却时间</div><div class="v" id="st-cd">—</div></div>
+      </div>
+
+      <div class="panel">
+        <h2>实例列表 <span class="sub" id="list-sub">加载中…</span></h2>
+        <div id="list" class="empty">加载中…</div>
+        <div class="row" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <button type="button" class="btn btn-sm" id="btn-add">＋ 增加 1 个实例</button>
+          <label class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
+            目标数量
+            <input id="want-n" type="number" min="1" max="10" value="2" style="width:64px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          </label>
+          <button type="button" class="btn btn-sm" id="btn-want">应用目标 N</button>
+          <span class="hint">热加实例需 compose 预映射 11000–1100N 端口</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>运行配置 <span class="sub">保存后立即对后续 rotate/health 生效</span></h2>
+        <div class="cfg">
+          <div class="cfg-grid">
+            <div class="field">
+              <label for="cfg-cooldown">旋转冷却（秒）</label>
+              <input id="cfg-cooldown" type="number" min="0" step="1">
+            </div>
+            <div class="field">
+              <label for="cfg-mode">旋转模式</label>
+              <select id="cfg-mode">
+                <option value="restart">restart（保留注册，重启进程）</option>
+                <option value="hard">hard（清注册后重连）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-unique">IPv4 池内互异</label>
+              <select id="cfg-unique">
+                <option value="1">开启</option>
+                <option value="0">关闭</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-retries">互异 restart 重试次数</label>
+              <input id="cfg-retries" type="number" min="0" max="20">
+            </div>
+            <div class="field">
+              <label for="cfg-hard">互异 hard 重试次数</label>
+              <input id="cfg-hard" type="number" min="0" max="10">
+            </div>
+            <div class="field">
+              <label for="cfg-backoff">互异退避（秒）</label>
+              <input id="cfg-backoff" type="number" min="0" max="120">
+            </div>
+            <div class="field">
+              <label for="cfg-auto">失败自动旋转</label>
+              <select id="cfg-auto">
+                <option value="0">关闭</option>
+                <option value="1">开启</option>
+              </select>
+            </div>
+          </div>
+          <div class="row" style="margin-top:14px">
+            <button type="button" class="btn btn-primary" id="btn-save-cfg">保存配置</button>
+            <button type="button" class="btn btn-ghost" id="btn-reload-cfg">重新加载</button>
+            <span class="token-mask" id="token-hint"></span>
+          </div>
+        </div>
+      </div>
     </div>
-    <div id="list"><div class="msg">加载中…</div></div>
-    <div class="agg">
-      <span class="label">聚合</span>
-      <span class="port">:1080</span>
-      <span style="flex:1"></span>
-      <span class="label" id="agg-status">—</span>
-      <span class="label" id="cd-status"></span>
+
+    <footer class="foot">仅反代管理面 · SOCKS 端口不对外 · pool.mcheiyue.com</footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="modal-bg" id="modal">
+    <div class="modal">
+      <h3 id="modal-title">确认</h3>
+      <p id="modal-body">确定？</p>
+      <div class="btns">
+        <button type="button" class="btn btn-ghost" id="modal-cancel">取消</button>
+        <button type="button" class="btn btn-danger" id="modal-ok">确定</button>
+      </div>
     </div>
   </div>
-  <div id="toast" class="toast"></div>
+
   <script>
-    let cooldownSec = 300;
-    function getToken() {
-      const q = new URLSearchParams(location.search).get('token');
-      if (q) { localStorage.setItem('wp_token', q); return q; }
-      return localStorage.getItem('wp_token') || '';
-    }
-    function authQS(prefix) {
-      const t = getToken();
-      if (!t) return '';
-      return (prefix || '?') + 'token=' + encodeURIComponent(t);
-    }
-    function tokAmp() {
-      const t = getToken();
-      return t ? '&token=' + encodeURIComponent(t) : '';
-    }
-    function saveToken() {
-      const v = document.getElementById('token-input').value.trim();
-      if (!v) return;
-      localStorage.setItem('wp_token', v);
+(function () {
+  const LS_KEY = 'wp_control_token';
+  let cooldownSec = 300;
+  let pollTimer = null;
+  let modalResolve = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function getToken() {
+    return (localStorage.getItem(LS_KEY) || '').trim();
+  }
+
+  function setToken(t) {
+    t = (t || '').trim();
+    if (t) localStorage.setItem(LS_KEY, t);
+    else localStorage.removeItem(LS_KEY);
+    // 地址栏去掉 ?token=，避免历史/Referer 泄露
+    try {
       const u = new URL(location.href);
-      u.searchParams.set('token', v);
-      history.replaceState(null, '', u.toString());
-      document.getElementById('auth').style.display = 'none';
-      load();
-    }
-    function cooldownLeft(last) {
-      if (!last || !cooldownSec) return '';
-      const t = Date.parse(last);
-      if (!t) return '';
-      const left = Math.ceil((t + cooldownSec * 1000 - Date.now()) / 1000);
-      if (left <= 0) return '可旋转';
-      return '冷却 ' + left + 's';
-    }
-    async function loadConfig() {
-      try {
-        const res = await fetch('/config' + authQS(), { cache: 'no-store' });
-        if (!res.ok) return;
-        const c = await res.json();
-        const n = parseInt(c.rotate_cooldown, 10);
-        if (!isNaN(n) && n >= 0) cooldownSec = n;
-        document.getElementById('cd-status').textContent = 'cooldown ' + cooldownSec + 's';
-      } catch (_) {}
-    }
-    async function load() {
-      const list = document.getElementById('list');
-      try {
-        const res = await fetch('/instances' + authQS(), { cache: 'no-store' });
-        if (res.status === 401) {
-          document.getElementById('auth').style.display = 'block';
-          list.innerHTML = '<div class="msg">需要 token。请输入 CONTROL_TOKEN。</div>';
-          return;
-        }
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        document.getElementById('auth').style.display = 'none';
-        render(Array.isArray(data) ? data : []);
-        loadConfig();
-      } catch (e) {
-        list.innerHTML = '<div class="msg">连接失败：' + e.message + '<br><small>隧道 → 9090/19090，容器需在跑</small></div>';
+      if (u.searchParams.has('token')) {
+        u.searchParams.delete('token');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
       }
+    } catch (_) {}
+  }
+
+  // 启动时：若 URL 带 token，迁入 localStorage 并清 URL
+  (function migrateUrlToken() {
+    try {
+      const u = new URL(location.href);
+      const q = u.searchParams.get('token');
+      if (q) setToken(q);
+    } catch (_) {}
+  })();
+
+  function authHeaders(json) {
+    const h = {};
+    const t = getToken();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    if (json) h['Content-Type'] = 'application/json';
+    return h;
+  }
+
+  function maskToken(t) {
+    if (!t) return '未登录';
+    if (t.length <= 4) return '令牌 ·•••';
+    return '令牌 ·•••' + t.slice(-4);
+  }
+
+  function toast(msg, isErr) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.toggle('err', !!isErr);
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 3200);
+  }
+
+  function confirmModal(title, body) {
+    $('modal-title').textContent = title;
+    $('modal-body').textContent = body;
+    $('modal').classList.add('show');
+    return new Promise((resolve) => { modalResolve = resolve; });
+  }
+  $('modal-cancel').onclick = () => { $('modal').classList.remove('show'); if (modalResolve) modalResolve(false); };
+  $('modal-ok').onclick = () => { $('modal').classList.remove('show'); if (modalResolve) modalResolve(true); };
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: authHeaders(!!opts.body),
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      cache: 'no-store',
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (_) { data = { raw: text }; }
+    return { res, data, text };
+  }
+
+  function cooldownLeft(last) {
+    if (!last || !cooldownSec) return '';
+    const t = Date.parse(last);
+    if (!t) return '';
+    const left = Math.ceil((t + cooldownSec * 1000 - Date.now()) / 1000);
+    if (left <= 0) return '可旋转';
+    return '冷却 ' + left + 's';
+  }
+
+  function showAuth(need) {
+    $('auth-panel').style.display = need ? 'block' : 'none';
+    $('main').style.display = need ? 'none' : 'block';
+    if (need) $('token-input').focus();
+  }
+
+  function statusClass(s) {
+    if (s === 'ok') return 'ok';
+    if (s === 'degraded') return 'warn';
+    return 'bad';
+  }
+  function statusText(s) {
+    if (s === 'ok') return '正常';
+    if (s === 'degraded') return '降级';
+    if (s === 'down') return '不可用';
+    return s || '—';
+  }
+
+  async function loadHealth() {
+    const { res, data } = await api('/health');
+    if (res.status === 401) return false;
+    if (!res.ok || !data) return true;
+    const st = $('st-status');
+    st.textContent = statusText(data.status);
+    st.className = 'v ' + statusClass(data.status);
+    $('st-health').textContent = (data.healthy ?? '—') + ' / ' + (data.total ?? '—');
+    $('st-health').className = 'v ' + (data.healthy > 0 ? 'ok' : 'bad');
+    return true;
+  }
+
+  async function loadConfig() {
+    const { res, data } = await api('/config');
+    if (res.status === 401) return false;
+    if (!res.ok || !data) return true;
+    const cd = parseInt(data.rotate_cooldown, 10);
+    if (!isNaN(cd) && cd >= 0) cooldownSec = cd;
+    $('st-cd').textContent = cooldownSec + 's';
+    $('cfg-cooldown').value = data.rotate_cooldown ?? '';
+    $('cfg-mode').value = data.rotate_mode || 'restart';
+    $('cfg-unique').value = String(data.v4_unique ?? '1');
+    $('cfg-retries').value = data.v4_unique_retries ?? '';
+    $('cfg-hard').value = data.v4_unique_hard_retries ?? '';
+    $('cfg-backoff').value = data.v4_unique_backoff ?? '';
+    $('cfg-auto').value = String(data.health_auto_rotate ?? '0');
+    const wn = parseInt(data.warp_instances, 10);
+    if (!isNaN(wn) && wn > 0) $('want-n').value = wn;
+    $('token-hint').textContent = maskToken(getToken());
+    return true;
+  }
+
+  function renderList(instances) {
+    const list = $('list');
+    if (!instances.length) {
+      list.innerHTML = '<div class="empty">暂无实例（启动中或尚未写入状态）</div>';
+      $('list-sub').textContent = '0 个';
+      return;
     }
-    function render(instances) {
-      const list = document.getElementById('list');
-      list.innerHTML = '';
-      if (!instances.length) {
-        list.innerHTML = '<div class="msg">暂无实例</div>';
-        document.getElementById('agg-status').textContent = '健康 0/0';
-        return;
+    instances.sort((a, b) => (a.id | 0) - (b.id | 0));
+    let ok = 0;
+    list.innerHTML = '';
+    instances.forEach((inst) => {
+      if (inst.healthy) ok++;
+      const cd = cooldownLeft(inst.last_rotate);
+      const card = document.createElement('div');
+      card.className = 'card';
+      const uniq = inst.unique === false ? ' · IPv4 冲突' : '';
+      const lr = inst.last_rotate ? ' · 上次旋转 ' + inst.last_rotate : '';
+      card.innerHTML =
+        '<div class="id">' + inst.id + '</div>' +
+        '<div class="dot ' + (inst.healthy ? 'on' : 'off') + '" title="' + (inst.healthy ? '健康' : '异常') + '"></div>' +
+        '<div class="info">' +
+          '<div class="v4">' + (inst.v4 || inst.ip || '—') + '</div>' +
+          (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
+          '<div class="meta">直连端口 :' + (inst.expose ?? '?') +
+            ' · ' + (inst.mode || 'warp') +
+            (inst.netns ? ' · ' + inst.netns : '') +
+            uniq + lr + (cd ? ' · ' + cd : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="actions">' +
+          '<button type="button" class="btn btn-sm btn-primary" data-rot="' + inst.id + '">旋转出口</button>' +
+          '<button type="button" class="btn btn-sm btn-danger" data-del="' + inst.id + '">删除</button>' +
+        '</div>';
+      list.appendChild(card);
+    });
+    $('list-sub').textContent = ok + ' 健康 / 共 ' + instances.length;
+    list.querySelectorAll('[data-rot]').forEach((btn) => {
+      btn.onclick = () => rotateOne(+btn.getAttribute('data-rot'), btn);
+    });
+    list.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.onclick = () => deleteOne(+btn.getAttribute('data-del'));
+    });
+  }
+
+  async function loadInstances() {
+    const { res, data } = await api('/instances');
+    if (res.status === 401) {
+      showAuth(true);
+      return false;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showAuth(false);
+    renderList(Array.isArray(data) ? data : []);
+    return true;
+  }
+
+  async function refresh() {
+    if (!getToken()) {
+      showAuth(true);
+      return;
+    }
+    try {
+      const ok = await loadInstances();
+      if (!ok) return;
+      await loadHealth();
+      await loadConfig();
+    } catch (e) {
+      $('list').innerHTML = '<div class="empty">连接失败：' + e.message + '<br><small>请确认服务与域名反代正常</small></div>';
+    }
+  }
+
+  async function rotateOne(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '旋转中…'; }
+    try {
+      const { res, data } = await api('/rotate?id=' + id + '&mode=restart', { method: 'POST' });
+      if (res.status === 409 || (data && data.reason === 'v4_collision')) {
+        toast('实例 ' + id + '：IPv4 与其它实例冲突（尝试 ' + (data && data.attempts || '?') + ' 次）', true);
+      } else if (res.status === 429) {
+        toast('实例 ' + id + '：仍在冷却中', true);
+      } else if (res.ok && data && data.ok !== false) {
+        toast('实例 ' + id + ' 已旋转' + (data.v4 ? ' → ' + data.v4 : ''));
+      } else {
+        toast('旋转失败：' + ((data && (data.error || data.output)) || res.status), true);
       }
-      let ok = 0;
-      instances.sort((a, b) => (a.id|0) - (b.id|0));
-      instances.forEach(inst => {
-        if (inst.healthy) ok++;
-        const cd = cooldownLeft(inst.last_rotate);
-        const card = document.createElement('div');
-        card.className = 'card';
-        card.innerHTML =
-          '<div class="card-body">' +
-            '<div class="id">' + inst.id + '</div>' +
-            '<div class="dot ' + (inst.healthy ? 'ok' : 'fail') + '"></div>' +
-            '<div class="info">' +
-              '<div class="v4">' + (inst.v4 || inst.ip || '—') + '</div>' +
-              (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
-              '<div class="meta">:' + (inst.expose || '?') +
-                ' · ' + (inst.mode || 'warp') +
-                (inst.unique === false ? ' · 冲突' : '') +
-                (inst.last_rotate ? ' · ' + inst.last_rotate : '') +
-                (cd ? ' · ' + cd : '') +
-              '</div>' +
-            '</div>' +
-            '<button class="rotate-btn" id="rot-' + inst.id + '" type="button" onclick="rotate(' + inst.id + ')">重启</button>' +
-          '</div>';
-        list.appendChild(card);
-      });
-      document.getElementById('agg-status').textContent = '健康 ' + ok + '/' + instances.length;
+    } catch (e) {
+      toast('旋转失败：' + e.message, true);
     }
-    async function rotate(id) {
-      const btn = document.getElementById('rot-' + id);
-      if (btn) { btn.disabled = true; btn.textContent = '…'; }
-      try {
-        const res = await fetch('/rotate?id=' + id + '&mode=restart' + tokAmp(), { method: 'POST' });
-        const j = await res.json().catch(() => ({}));
-        if (res.status === 409 || j.reason === 'v4_collision') {
-          showToast('实例 ' + id + ' v4 冲突 (attempts=' + (j.attempts || '?') + ')');
-        } else if (res.ok && j.ok !== false) {
-          showToast('实例 ' + id + ' ok' + (j.v4 ? ' → ' + j.v4 : ''));
-        } else {
-          showToast('失败: ' + (j.error || j.output || res.status));
-        }
-      } catch (e) {
-        showToast('失败: ' + e.message);
-      }
-      setTimeout(load, 2000);
+    setTimeout(refresh, 1500);
+  }
+
+  async function rotateAll() {
+    const ok = await confirmModal('全部旋转', '将对池内所有实例依次旋转出口 IP，可能需要数分钟。是否继续？');
+    if (!ok) return;
+    toast('已提交全部旋转…');
+    try {
+      const { res, data } = await api('/rotate?all=1&mode=restart', { method: 'POST' });
+      if (res.ok) toast('全部旋转已提交');
+      else toast('失败：' + ((data && data.error) || res.status), true);
+    } catch (e) {
+      toast(e.message, true);
     }
-    async function rotateAll() {
-      showToast('全部旋转中…');
-      try {
-        const res = await fetch('/rotate?all=1&mode=restart' + tokAmp(), { method: 'POST' });
-        const j = await res.json().catch(() => ({}));
-        showToast(res.ok ? '全部旋转已提交' : ('失败 ' + (j.error || res.status)));
-      } catch (e) {
-        showToast(e.message);
-      }
-      setTimeout(load, 3000);
+    setTimeout(refresh, 2500);
+  }
+
+  async function deleteOne(id) {
+    const ok = await confirmModal('删除实例 ' + id, '将停止该实例并从调度中移除。预映射端口不会自动释放到 Docker。是否删除？');
+    if (!ok) return;
+    try {
+      const { res, data } = await api('/instances?id=' + id, { method: 'DELETE' });
+      if (res.ok && data && data.ok !== false) toast('实例 ' + id + ' 已停止');
+      else toast('删除失败：' + ((data && data.error) || res.status), true);
+    } catch (e) {
+      toast(e.message, true);
     }
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.textContent = msg;
-      t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 2800);
+    setTimeout(refresh, 1200);
+  }
+
+  async function addOne() {
+    try {
+      const { res, data } = await api('/instances', { method: 'POST' });
+      if (res.ok) toast('已请求增加实例（目标 N=' + (data && data.desired) + '）');
+      else toast('失败：' + ((data && data.error) || res.status), true);
+    } catch (e) {
+      toast(e.message, true);
     }
-    setInterval(load, 5000);
-    load();
+    setTimeout(refresh, 2000);
+  }
+
+  async function applyWant() {
+    const n = parseInt($('want-n').value, 10);
+    if (!n || n < 1) { toast('请输入有效目标数量', true); return; }
+    const ok = await confirmModal('设置目标实例数', '将目标数量设为 ' + n + '。仅当宿主机已预映射足够端口时，新增实例才能对外直连。');
+    if (!ok) return;
+    try {
+      const { res, data } = await api('/instances?want=' + n, { method: 'POST' });
+      if (res.ok) toast('目标 N=' + (data && data.desired) + ' 已写入');
+      else toast('失败：' + ((data && data.error) || res.status), true);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    setTimeout(refresh, 2000);
+  }
+
+  async function saveConfig() {
+    const body = {
+      rotate_cooldown: parseInt($('cfg-cooldown').value, 10) || 0,
+      rotate_mode: $('cfg-mode').value || 'restart',
+      v4_unique: parseInt($('cfg-unique').value, 10),
+      v4_unique_retries: parseInt($('cfg-retries').value, 10) || 0,
+      v4_unique_hard_retries: parseInt($('cfg-hard').value, 10) || 0,
+      v4_unique_backoff: parseInt($('cfg-backoff').value, 10) || 0,
+      health_auto_rotate: $('cfg-auto').value,
+    };
+    try {
+      const { res, data } = await api('/config', { method: 'PUT', body: body });
+      if (res.ok) toast('配置已保存');
+      else toast('保存失败：' + ((data && data.error) || res.status), true);
+    } catch (e) {
+      toast(e.message, true);
+    }
+    loadConfig();
+  }
+
+  $('btn-save-token').onclick = () => {
+    const v = $('token-input').value.trim();
+    if (!v) { toast('请输入令牌', true); return; }
+    setToken(v);
+    $('token-input').value = '';
+    toast('已登录');
+    refresh();
+    startPoll();
+  };
+  $('btn-logout').onclick = () => {
+    setToken('');
+    stopPoll();
+    showAuth(true);
+    toast('已清除本机令牌');
+  };
+  $('btn-refresh').onclick = () => refresh();
+  $('btn-rotate-all').onclick = () => rotateAll();
+  $('btn-add').onclick = () => addOne();
+  $('btn-want').onclick = () => applyWant();
+  $('btn-save-cfg').onclick = () => saveConfig();
+  $('btn-reload-cfg').onclick = () => loadConfig();
+
+  function startPoll() {
+    stopPoll();
+    pollTimer = setInterval(refresh, 5000);
+  }
+  function stopPoll() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  if (getToken()) {
+    showAuth(false);
+    refresh();
+    startPoll();
+  } else {
+    showAuth(true);
+  }
+})();
   </script>
 </body>
 </html>
