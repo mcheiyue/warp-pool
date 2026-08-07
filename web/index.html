@@ -3,87 +3,86 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WARP 出口池 · warppool</title>
+  <title>warp-pool · 出口池</title>
   <style>
     :root {
-      --bg: #0c0c10;
-      --panel: #14141c;
+      --bg: #0b0b0f;
+      --panel: #13131a;
       --panel2: #1a1a24;
-      --border: #2a2a36;
-      --text: #e8e8ef;
-      --muted: #8b8b9a;
+      --line: #2a2a36;
+      --text: #ececf2;
+      --muted: #8b8b9c;
       --green: #22c55e;
       --red: #ef4444;
       --blue: #818cf8;
       --amber: #f59e0b;
-      --radius: 12px;
+      --r: 12px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-      background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.5;
+      background: radial-gradient(1200px 600px at 10% -10%, #1a1530 0%, transparent 50%), var(--bg);
+      color: var(--text); min-height: 100vh; line-height: 1.5;
     }
-    .wrap { max-width: 880px; margin: 0 auto; padding: 28px 16px 48px; }
-    header.app-head {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px;
+    .wrap { max-width: 900px; margin: 0 auto; padding: 28px 16px 56px; }
+    header {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 22px;
     }
-    header h1 { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; }
+    header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; }
     .badge {
-      font-size: 0.72rem; color: var(--muted); background: var(--panel2);
-      padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
+      font-size: .72rem; color: var(--muted); border: 1px solid var(--line);
+      background: var(--panel2); padding: 2px 10px; border-radius: 999px;
     }
     .head-actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
     .btn {
-      background: var(--panel2); border: 1px solid var(--border); color: var(--text);
-      font-size: 0.85rem; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+      background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+      font-size: .85rem; padding: 7px 14px; border-radius: 8px; cursor: pointer;
       transition: border-color .15s, background .15s, opacity .15s;
     }
-    .btn:hover { border-color: #444; background: #22222e; }
+    .btn:hover { border-color: #4a4a5c; background: #22222e; }
     .btn:disabled { opacity: .45; cursor: not-allowed; }
     .btn-primary { border-color: #166534; color: #bbf7d0; background: rgba(34,197,94,.12); }
     .btn-primary:hover { border-color: var(--green); }
     .btn-danger { border-color: #7f1d1d; color: #fecaca; background: rgba(239,68,68,.1); }
     .btn-danger:hover { border-color: var(--red); }
     .btn-ghost { color: var(--muted); }
-    .btn-sm { padding: 5px 10px; font-size: 0.8rem; }
+    .btn-sm { padding: 5px 10px; font-size: .8rem; }
 
     .stats {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 10px; margin-bottom: 16px;
     }
     .stat {
-      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
       padding: 14px 16px;
     }
-    .stat .k { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
-    .stat .v { font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .stat .k { font-size: .75rem; color: var(--muted); margin-bottom: 4px; }
+    .stat .v { font-size: 1.2rem; font-weight: 650; font-variant-numeric: tabular-nums; }
     .stat .v.ok { color: var(--green); }
     .stat .v.warn { color: var(--amber); }
     .stat .v.bad { color: var(--red); }
 
     .panel {
-      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--r);
       padding: 16px 18px; margin-bottom: 14px;
     }
     .panel h2 {
-      font-size: 0.95rem; font-weight: 600; margin-bottom: 12px;
-      display: flex; align-items: center; gap: 8px;
+      font-size: .95rem; font-weight: 600; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     }
-    .panel h2 span.sub { font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+    .panel h2 .sub { font-weight: 400; color: var(--muted); font-size: .8rem; }
 
-    .auth-box label, .cfg label {
-      display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 6px;
+    label { display: block; font-size: .8rem; color: var(--muted); margin-bottom: 6px; }
+    input, select {
+      width: 100%; max-width: 360px; background: var(--bg); border: 1px solid var(--line);
+      color: var(--text); padding: 10px 12px; border-radius: 8px; font-size: .95rem;
     }
-    .auth-box input, .cfg input, .cfg select {
-      width: 100%; max-width: 360px; background: var(--bg); border: 1px solid var(--border);
-      color: var(--text); padding: 10px 12px; border-radius: 8px; font-size: 0.95rem;
-    }
-    .auth-box .row, .cfg .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
-    .auth-box .hint, .cfg .hint { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
-    .token-mask { font-family: ui-monospace, monospace; color: var(--muted); font-size: 0.85rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+    .hint { font-size: .78rem; color: var(--muted); margin-top: 6px; }
+    .token-mask { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: .85rem; }
 
     .card {
-      background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel2); border: 1px solid var(--line); border-radius: 10px;
       padding: 14px 16px; margin-bottom: 10px; display: flex; gap: 12px; align-items: flex-start;
     }
     .card .id {
@@ -96,22 +95,21 @@
     .dot.off { background: var(--red); }
     .info { flex: 1; min-width: 0; }
     .v4 { font-size: 1.1rem; font-weight: 650; color: var(--green); font-variant-numeric: tabular-nums; }
-    .v6 { font-size: 0.8rem; color: var(--blue); margin-top: 2px; word-break: break-all; }
-    .meta { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+    .v6 { font-size: .8rem; color: var(--blue); margin-top: 2px; word-break: break-all; }
+    .meta { font-size: .78rem; color: var(--muted); margin-top: 6px; line-height: 1.45; }
     .actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
     .empty { text-align: center; padding: 36px 16px; color: var(--muted); }
 
     .cfg-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;
     }
-    .cfg-grid .field label { margin-bottom: 4px; }
     .cfg-grid .field input, .cfg-grid .field select { max-width: none; }
 
     .toast {
       position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-      background: #1e1e2a; border: 1px solid var(--border); color: var(--text);
-      padding: 10px 22px; border-radius: 10px; font-size: 0.88rem; opacity: 0;
-      transition: opacity .25s; pointer-events: none; z-index: 50; max-width: 90vw;
+      background: #1e1e2a; border: 1px solid var(--line); color: var(--text);
+      padding: 10px 22px; border-radius: 10px; font-size: .88rem; opacity: 0;
+      transition: opacity .25s; pointer-events: none; z-index: 50; max-width: 92vw;
     }
     .toast.show { opacity: 1; }
     .toast.err { border-color: #7f1d1d; color: #fecaca; }
@@ -122,114 +120,111 @@
     }
     .modal-bg.show { display: flex; }
     .modal {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-      padding: 22px; max-width: 400px; width: 100%;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+      padding: 22px; max-width: 420px; width: 100%;
     }
     .modal h3 { font-size: 1.05rem; margin-bottom: 8px; }
-    .modal p { color: var(--muted); font-size: 0.9rem; margin-bottom: 16px; }
+    .modal p { color: var(--muted); font-size: .9rem; margin-bottom: 16px; }
     .modal .btns { display: flex; gap: 8px; justify-content: flex-end; }
 
-    footer.foot { margin-top: 20px; font-size: 0.75rem; color: var(--muted); text-align: center; }
+    footer { margin-top: 22px; font-size: .75rem; color: var(--muted); text-align: center; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="app-head">
-      <h1>WARP 出口池</h1>
-      <span class="badge">v0.4 · warppool</span>
+    <header>
+      <h1>warp-pool</h1>
+      <span class="badge">出口池 · v0.4</span>
       <div class="head-actions">
         <button type="button" class="btn btn-ghost" id="btn-refresh">刷新</button>
-        <button type="button" class="btn btn-primary" id="btn-rotate-all">全部旋转</button>
-        <button type="button" class="btn btn-ghost" id="btn-logout" title="清除本机令牌">退出登录</button>
+        <button type="button" class="btn btn-primary" id="btn-rotate-all">全部换 IP</button>
+        <button type="button" class="btn btn-ghost" id="btn-logout" title="清除本机令牌">退出</button>
       </div>
     </header>
 
     <div id="auth-panel" class="panel" style="display:none">
-      <h2>管理令牌 <span class="sub">仅保存在本机浏览器，请求走 Authorization 头</span></h2>
-      <div class="auth-box">
-        <label for="token-input">CONTROL_TOKEN</label>
-        <div class="row">
-          <input id="token-input" type="password" placeholder="输入管理令牌" autocomplete="current-password" spellcheck="false">
-          <button type="button" class="btn btn-primary" id="btn-save-token">登录</button>
-        </div>
-        <p class="hint">令牌不会写进地址栏，避免历史记录与访问日志泄露。公网域名务必使用强令牌。</p>
+      <h2>管理令牌 <span class="sub">只存在本机浏览器，请求走 Authorization 头</span></h2>
+      <label for="token-input">CONTROL_TOKEN</label>
+      <div class="row">
+        <input id="token-input" type="password" placeholder="输入管理令牌" autocomplete="current-password" spellcheck="false">
+        <button type="button" class="btn btn-primary" id="btn-save-token">登录</button>
       </div>
+      <p class="hint">令牌不会写入地址栏。公网暴露管理面时务必设置强令牌。</p>
     </div>
 
     <div id="main" style="display:none">
       <div class="stats">
         <div class="stat"><div class="k">池状态</div><div class="v" id="st-status">—</div></div>
         <div class="stat"><div class="k">健康实例</div><div class="v" id="st-health">—</div></div>
-        <div class="stat"><div class="k">聚合端口</div><div class="v">:1080</div></div>
-        <div class="stat"><div class="k">冷却时间</div><div class="v" id="st-cd">—</div></div>
+        <div class="stat"><div class="k">聚合入口</div><div class="v">:1080</div></div>
+        <div class="stat"><div class="k">换 IP 冷却</div><div class="v" id="st-cd">—</div></div>
       </div>
 
       <div class="panel">
-        <h2>实例列表 <span class="sub" id="list-sub">加载中…</span></h2>
+        <h2>实例 <span class="sub" id="list-sub">加载中…</span></h2>
         <div id="list" class="empty">加载中…</div>
-        <div class="row" style="margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-          <button type="button" class="btn btn-sm" id="btn-add">＋ 增加 1 个实例</button>
+        <div class="row" style="margin-top:12px;margin-bottom:0">
+          <button type="button" class="btn btn-sm" id="btn-add">＋ 增加 1 个</button>
           <label class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
             目标数量
-            <input id="want-n" type="number" min="1" max="10" value="2" style="width:64px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            <input id="want-n" type="number" min="1" max="32" value="2"
+              style="width:72px;padding:6px 8px;max-width:none">
           </label>
           <button type="button" class="btn btn-sm" id="btn-want">应用目标 N</button>
-          <span class="hint">热加实例需 compose 预映射 11000–1100N 端口</span>
         </div>
+        <p class="hint">热增实例会进入聚合口 :1080。若启动时未预映射 11000+ 直连端口，新实例可能只有聚合入口、无独立直连口。</p>
       </div>
 
       <div class="panel">
-        <h2>运行配置 <span class="sub">保存后立即对后续 rotate/health 生效</span></h2>
-        <div class="cfg">
-          <div class="cfg-grid">
-            <div class="field">
-              <label for="cfg-cooldown">旋转冷却（秒）</label>
-              <input id="cfg-cooldown" type="number" min="0" step="1">
-            </div>
-            <div class="field">
-              <label for="cfg-mode">旋转模式</label>
-              <select id="cfg-mode">
-                <option value="restart">restart（保留注册，重启进程）</option>
-                <option value="hard">hard（清注册后重连）</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="cfg-unique">IPv4 池内互异</label>
-              <select id="cfg-unique">
-                <option value="1">开启</option>
-                <option value="0">关闭</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="cfg-retries">互异 restart 重试次数</label>
-              <input id="cfg-retries" type="number" min="0" max="20">
-            </div>
-            <div class="field">
-              <label for="cfg-hard">互异 hard 重试次数</label>
-              <input id="cfg-hard" type="number" min="0" max="10">
-            </div>
-            <div class="field">
-              <label for="cfg-backoff">互异退避（秒）</label>
-              <input id="cfg-backoff" type="number" min="0" max="120">
-            </div>
-            <div class="field">
-              <label for="cfg-auto">失败自动旋转</label>
-              <select id="cfg-auto">
-                <option value="0">关闭</option>
-                <option value="1">开启</option>
-              </select>
-            </div>
+        <h2>运行配置 <span class="sub">保存后立即对后续换 IP / 健康检查生效</span></h2>
+        <div class="cfg-grid">
+          <div class="field">
+            <label for="cfg-cooldown">换 IP 冷却（秒）</label>
+            <input id="cfg-cooldown" type="number" min="0" step="1">
           </div>
-          <div class="row" style="margin-top:14px">
-            <button type="button" class="btn btn-primary" id="btn-save-cfg">保存配置</button>
-            <button type="button" class="btn btn-ghost" id="btn-reload-cfg">重新加载</button>
-            <span class="token-mask" id="token-hint"></span>
+          <div class="field">
+            <label for="cfg-mode">切换方式</label>
+            <select id="cfg-mode">
+              <option value="restart">重启进程（保留注册）</option>
+              <option value="hard">重注册（清 STATE）</option>
+            </select>
           </div>
+          <div class="field">
+            <label for="cfg-unique">池内 IPv4 互异</label>
+            <select id="cfg-unique">
+              <option value="1">开启</option>
+              <option value="0">关闭</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cfg-retries">互异 restart 重试</label>
+            <input id="cfg-retries" type="number" min="0" max="20">
+          </div>
+          <div class="field">
+            <label for="cfg-hard">互异 hard 重试</label>
+            <input id="cfg-hard" type="number" min="0" max="10">
+          </div>
+          <div class="field">
+            <label for="cfg-backoff">互异退避（秒）</label>
+            <input id="cfg-backoff" type="number" min="0" max="120">
+          </div>
+          <div class="field">
+            <label for="cfg-auto">失败自动换 IP</label>
+            <select id="cfg-auto">
+              <option value="0">关闭</option>
+              <option value="1">开启</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:14px;margin-bottom:0">
+          <button type="button" class="btn btn-primary" id="btn-save-cfg">保存配置</button>
+          <button type="button" class="btn btn-ghost" id="btn-reload-cfg">重新加载</button>
+          <span class="token-mask" id="token-hint"></span>
         </div>
       </div>
     </div>
 
-    <footer class="foot">仅反代管理面 · SOCKS 端口不对外 · pool.mcheiyue.com</footer>
+    <footer>管理面 · SOCKS 请走本机映射端口，勿把代理口直接挂公网</footer>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -261,7 +256,6 @@
     t = (t || '').trim();
     if (t) localStorage.setItem(LS_KEY, t);
     else localStorage.removeItem(LS_KEY);
-    // 地址栏去掉 ?token=，避免历史/Referer 泄露
     try {
       const u = new URL(location.href);
       if (u.searchParams.has('token')) {
@@ -271,7 +265,6 @@
     } catch (_) {}
   }
 
-  // 启动时：若 URL 带 token，迁入 localStorage 并清 URL
   (function migrateUrlToken() {
     try {
       const u = new URL(location.href);
@@ -290,8 +283,8 @@
 
   function maskToken(t) {
     if (!t) return '未登录';
-    if (t.length <= 4) return '令牌 ·•••';
-    return '令牌 ·•••' + t.slice(-4);
+    if (t.length <= 4) return '令牌 ·••••';
+    return '令牌 ·••••' + t.slice(-4);
   }
 
   function toast(msg, isErr) {
@@ -330,7 +323,7 @@
     const t = Date.parse(last);
     if (!t) return '';
     const left = Math.ceil((t + cooldownSec * 1000 - Date.now()) / 1000);
-    if (left <= 0) return '可旋转';
+    if (left <= 0) return '可换 IP';
     return '冷却 ' + left + 's';
   }
 
@@ -400,28 +393,28 @@
       const card = document.createElement('div');
       card.className = 'card';
       const uniq = inst.unique === false ? ' · IPv4 冲突' : '';
-      const lr = inst.last_rotate ? ' · 上次旋转 ' + inst.last_rotate : '';
+      const lr = inst.last_rotate ? ' · 上次换 IP ' + inst.last_rotate : '';
       card.innerHTML =
         '<div class="id">' + inst.id + '</div>' +
         '<div class="dot ' + (inst.healthy ? 'on' : 'off') + '" title="' + (inst.healthy ? '健康' : '异常') + '"></div>' +
         '<div class="info">' +
           '<div class="v4">' + (inst.v4 || inst.ip || '—') + '</div>' +
           (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
-          '<div class="meta">直连端口 :' + (inst.expose ?? '?') +
+          '<div class="meta">直连 :' + (inst.expose ?? '?') +
             ' · ' + (inst.mode || 'warp') +
             (inst.netns ? ' · ' + inst.netns : '') +
             uniq + lr + (cd ? ' · ' + cd : '') +
           '</div>' +
         '</div>' +
         '<div class="actions">' +
-          '<button type="button" class="btn btn-sm btn-primary" data-rot="' + inst.id + '">旋转出口</button>' +
+          '<button type="button" class="btn btn-sm btn-primary" data-rot="' + inst.id + '">换 IP</button>' +
           '<button type="button" class="btn btn-sm btn-danger" data-del="' + inst.id + '">删除</button>' +
         '</div>';
       list.appendChild(card);
     });
     $('list-sub').textContent = ok + ' 健康 / 共 ' + instances.length;
     list.querySelectorAll('[data-rot]').forEach((btn) => {
-      btn.onclick = () => rotateOne(+btn.getAttribute('data-rot'), btn);
+      btn.onclick = () => changeIp(+btn.getAttribute('data-rot'), btn);
     });
     list.querySelectorAll('[data-del]').forEach((btn) => {
       btn.onclick = () => deleteOne(+btn.getAttribute('data-del'));
@@ -451,12 +444,13 @@
       await loadHealth();
       await loadConfig();
     } catch (e) {
-      $('list').innerHTML = '<div class="empty">连接失败：' + e.message + '<br><small>请确认服务与域名反代正常</small></div>';
+      $('list').innerHTML = '<div class="empty">连接失败：' + e.message +
+        '<br><small>请确认控制面地址与令牌正确</small></div>';
     }
   }
 
-  async function rotateOne(id, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = '旋转中…'; }
+  async function changeIp(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '切换中…'; }
     try {
       const { res, data } = await api('/rotate?id=' + id + '&mode=restart', { method: 'POST' });
       if (res.status === 409 || (data && data.reason === 'v4_collision')) {
@@ -464,23 +458,23 @@
       } else if (res.status === 429) {
         toast('实例 ' + id + '：仍在冷却中', true);
       } else if (res.ok && data && data.ok !== false) {
-        toast('实例 ' + id + ' 已旋转' + (data.v4 ? ' → ' + data.v4 : ''));
+        toast('实例 ' + id + ' 已换 IP' + (data.v4 ? ' → ' + data.v4 : ''));
       } else {
-        toast('旋转失败：' + ((data && (data.error || data.output)) || res.status), true);
+        toast('换 IP 失败：' + ((data && (data.error || data.output)) || res.status), true);
       }
     } catch (e) {
-      toast('旋转失败：' + e.message, true);
+      toast('换 IP 失败：' + e.message, true);
     }
     setTimeout(refresh, 1500);
   }
 
-  async function rotateAll() {
-    const ok = await confirmModal('全部旋转', '将对池内所有实例依次旋转出口 IP，可能需要数分钟。是否继续？');
+  async function changeIpAll() {
+    const ok = await confirmModal('全部换 IP', '将对池内所有实例依次切换出口 IP，可能需要数分钟。是否继续？');
     if (!ok) return;
-    toast('已提交全部旋转…');
+    toast('已提交全部换 IP…');
     try {
       const { res, data } = await api('/rotate?all=1&mode=restart', { method: 'POST' });
-      if (res.ok) toast('全部旋转已提交');
+      if (res.ok) toast('全部换 IP 已提交');
       else toast('失败：' + ((data && data.error) || res.status), true);
     } catch (e) {
       toast(e.message, true);
@@ -489,7 +483,7 @@
   }
 
   async function deleteOne(id) {
-    const ok = await confirmModal('删除实例 ' + id, '将停止该实例并从调度中移除。预映射端口不会自动释放到 Docker。是否删除？');
+    const ok = await confirmModal('删除实例 ' + id, '将停止该实例并从调度中移除。Docker 预映射端口不会自动释放。是否删除？');
     if (!ok) return;
     try {
       const { res, data } = await api('/instances?id=' + id, { method: 'DELETE' });
@@ -515,7 +509,10 @@
   async function applyWant() {
     const n = parseInt($('want-n').value, 10);
     if (!n || n < 1) { toast('请输入有效目标数量', true); return; }
-    const ok = await confirmModal('设置目标实例数', '将目标数量设为 ' + n + '。仅当宿主机已预映射足够端口时，新增实例才能对外直连。');
+    const ok = await confirmModal(
+      '设置目标实例数',
+      '将目标数量设为 ' + n + '。新实例会进入聚合口；仅当宿主机已预映射足够 11000+ 端口时，才有独立直连口。'
+    );
     if (!ok) return;
     try {
       const { res, data } = await api('/instances?want=' + n, { method: 'POST' });
@@ -563,7 +560,7 @@
     toast('已清除本机令牌');
   };
   $('btn-refresh').onclick = () => refresh();
-  $('btn-rotate-all').onclick = () => rotateAll();
+  $('btn-rotate-all').onclick = () => changeIpAll();
   $('btn-add').onclick = () => addOne();
   $('btn-want').onclick = () => applyWant();
   $('btn-save-cfg').onclick = () => saveConfig();
