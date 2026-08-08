@@ -181,6 +181,26 @@
       </div>
 
       <div class="panel">
+        <h2>选路日志 <span class="sub">聚合口每次成功拨号 · 源→目标→实例</span></h2>
+        <div id="routes-box" class="empty" style="font-family:ui-monospace,monospace;font-size:12px;max-height:220px;overflow:auto;white-space:pre-wrap">加载中…</div>
+        <div class="row" style="margin-top:8px;margin-bottom:0">
+          <button type="button" class="btn btn-sm" id="btn-routes-refresh">刷新日志</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>IP 历史 <span class="sub">按实例查看换 IP 记录</span></h2>
+        <div class="row" style="margin-bottom:8px">
+          <label class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
+            实例 id
+            <input id="hist-id" type="number" min="0" value="0" style="width:72px;padding:6px 8px;max-width:none">
+          </label>
+          <button type="button" class="btn btn-sm" id="btn-hist-load">加载</button>
+        </div>
+        <div id="hist-box" class="empty" style="font-family:ui-monospace,monospace;font-size:12px;max-height:180px;overflow:auto;white-space:pre-wrap">选择实例后加载</div>
+      </div>
+
+      <div class="panel">
         <h2>实例 <span class="sub" id="list-sub">加载中…</span></h2>
         <div id="list" class="empty">加载中…</div>
         <div class="row" style="margin-top:12px;margin-bottom:0">
@@ -347,6 +367,18 @@
     return '冷却 ' + left + 's';
   }
 
+  /** UTC/RFC3339 → 浏览器本地时区可读串 */
+  function fmtLocal(ts) {
+    if (!ts) return '';
+    const t = Date.parse(ts);
+    if (!t) return String(ts);
+    try {
+      return new Date(t).toLocaleString('zh-CN', { hour12: false });
+    } catch (_) {
+      return String(ts);
+    }
+  }
+
   function showAuth(need) {
     $('auth-panel').style.display = need ? 'block' : 'none';
     $('main').style.display = need ? 'none' : 'block';
@@ -460,7 +492,8 @@
       const card = document.createElement('div');
       card.className = 'card' + (pooled ? '' : ' out');
       const uniq = inst.unique === false ? ' · IPv4 冲突' : '';
-      const lr = inst.last_rotate ? ' · 上次换 IP ' + inst.last_rotate : '';
+      const lr = inst.last_rotate ? ' · 上次换 IP ' + fmtLocal(inst.last_rotate) : '';
+      const upd = inst.updated ? ' · 更新 ' + fmtLocal(inst.updated) : '';
       const tags =
         '<span class="tag ' + (pooled ? 'in' : 'out') + '">' + (pooled ? '入池' : '出池') + '</span>' +
         (isSticky ? '<span class="tag sticky">粘性</span>' : '');
@@ -473,7 +506,7 @@
           '<div class="meta">直连 :' + (inst.expose ?? '?') +
             ' · ' + (inst.mode || 'warp') +
             (inst.netns ? ' · ' + inst.netns : '') +
-            uniq + lr + (cd ? ' · ' + cd : '') +
+            uniq + lr + upd + (cd ? ' · ' + cd : '') +
           '</div>' +
         '</div>' +
         '<div class="actions">' +
@@ -481,6 +514,7 @@
             (pooled ? '出池' : '入池') + '</button>' +
           '<button type="button" class="btn btn-sm" data-sticky="' + inst.id + '">固定到此</button>' +
           '<button type="button" class="btn btn-sm btn-primary" data-rot="' + inst.id + '">换 IP</button>' +
+          '<button type="button" class="btn btn-sm" data-hist="' + inst.id + '">历史</button>' +
           '<button type="button" class="btn btn-sm btn-danger" data-del="' + inst.id + '">删除</button>' +
         '</div>';
       list.appendChild(card);
@@ -498,6 +532,55 @@
     list.querySelectorAll('[data-sticky]').forEach((btn) => {
       btn.onclick = () => setSticky(+btn.getAttribute('data-sticky'), btn);
     });
+    list.querySelectorAll('[data-hist]').forEach((btn) => {
+      btn.onclick = () => {
+        const id = +btn.getAttribute('data-hist');
+        const el = $('hist-id');
+        if (el) el.value = id;
+        loadIPHistory(id);
+      };
+    });
+  }
+
+  async function loadRoutes() {
+    const box = $('routes-box');
+    if (!box) return true;
+    const { res, data } = await api('/routes?limit=80');
+    if (res.status === 401) return false;
+    if (!res.ok || !Array.isArray(data)) {
+      box.textContent = '加载失败';
+      return true;
+    }
+    if (!data.length) {
+      box.textContent = '暂无选路记录（有聚合流量后出现）';
+      return true;
+    }
+    box.textContent = data.slice().reverse().map((r) => {
+      return fmtLocal(r.ts) + '  src=' + (r.src || '?') +
+        '  → id=' + r.backend_id + ' (' + (r.via || '?') + ')  ' + (r.target || '');
+    }).join('\n');
+    return true;
+  }
+
+  async function loadIPHistory(id) {
+    const box = $('hist-box');
+    if (!box) return;
+    if (id == null || isNaN(id)) id = parseInt(($('hist-id') && $('hist-id').value) || '0', 10);
+    box.textContent = '加载 id=' + id + ' …';
+    const { res, data } = await api('/ip-history?id=' + id + '&limit=50');
+    if (!res.ok || !data) {
+      box.textContent = '加载失败';
+      return;
+    }
+    const entries = data.entries || [];
+    if (!entries.length) {
+      box.textContent = 'id=' + id + ' 暂无换 IP 历史（下次换 IP 后写入）';
+      return;
+    }
+    box.textContent = entries.slice().reverse().map((e) => {
+      return fmtLocal(e.ts) + '  ' + (e.old || '—') + ' → ' + (e.new || '—') +
+        (e.reason ? '  (' + e.reason + ')' : '');
+    }).join('\n');
   }
 
   async function loadInstances() {
@@ -523,6 +606,7 @@
       if (!ok) return;
       await loadHealth();
       await loadConfig();
+      await loadRoutes();
     } catch (e) {
       $('list').innerHTML = '<div class="empty">连接失败：' + e.message +
         '<br><small>请确认控制面地址与令牌正确</small></div>';
@@ -681,6 +765,13 @@
   $('btn-save-cfg').onclick = () => saveConfig();
   $('btn-reload-cfg').onclick = () => loadConfig();
   $('btn-clear-sticky').onclick = () => clearSticky();
+  const btnRoutes = $('btn-routes-refresh');
+  if (btnRoutes) btnRoutes.onclick = () => loadRoutes();
+  const btnHist = $('btn-hist-load');
+  if (btnHist) btnHist.onclick = () => {
+    const id = parseInt(($('hist-id') && $('hist-id').value) || '0', 10);
+    loadIPHistory(id);
+  };
 
   function startPoll() {
     stopPoll();

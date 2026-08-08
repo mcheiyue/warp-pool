@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Warp Pool · 运维台</title>
+<style>
+:root{
+  --bg:#0f1218;--surface:#171c26;--surface2:#1e2533;--line:#2a3344;
+  --ink:#e8edf5;--muted:#8b97ab;--ok:#3dcf8e;--warn:#e6b84d;--bad:#ef6b6b;--accent:#5b8def;
+  --r:10px;--pad:14px;--mono:ui-monospace,Consolas,monospace;
+  --sans:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+body{font:13px/1.45 var(--sans);background:var(--bg);color:var(--ink);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line);background:#12161f}
+header h1{font-size:15px;font-weight:650;letter-spacing:.02em}
+header .meta{color:var(--muted);font-size:12px}
+main{max-width:1080px;margin:0 auto;padding:16px 18px 40px;display:grid;gap:14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:12px}
+.chip b{font-weight:650}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.sticky{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(8px)}
+.sticky .pool{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:baseline}
+.sticky .pool strong{font-size:14px}
+.sticky .pool span{color:var(--muted);font-size:12px}
+.sticky .actions{display:flex;gap:6px}
+.btn{appearance:none;border:1px solid var(--line);background:var(--surface2);color:var(--ink);border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer}
+.btn:hover{border-color:#3d4b63}.btn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:600}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}.sticky{grid-template-columns:1fr}}
+.card{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);padding:var(--pad);display:grid;gap:8px}
+.card h2{font-size:13px;font-weight:650;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card h2 .id{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:500}
+.kv{display:grid;grid-template-columns:72px 1fr;gap:4px 8px;font-size:12px}
+.kv dt{color:var(--muted)}.kv dd{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tags{display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:11px;padding:2px 6px;border-radius:4px;background:var(--surface2);color:var(--muted);border:1px solid var(--line)}
+.tag.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 35%,var(--line))}
+.tag.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,var(--line))}
+.tag.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 35%,var(--line))}
+.panel{border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.panel h3{font-size:12px;font-weight:650;padding:10px 12px;border-bottom:1px solid var(--line);color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:7px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:550;background:var(--surface2)}
+tr:last-child td{border-bottom:0}
+td.mono,th.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1.2fr;gap:12px}
+@media(max-width:760px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Warp Pool · 运维台</h1>
+  <div class="meta">mock · 本地预览 · 2026-08-08 14:32 CST</div>
+</header>
+<main>
+  <section class="chips" aria-label="总览">
+    <span class="chip"><i class="dot ok"></i>健康 <b>11</b></span>
+    <span class="chip"><i class="dot warn"></i>降级 <b>2</b></span>
+    <span class="chip"><i class="dot bad"></i>离线 <b>1</b></span>
+    <span class="chip">在用 IP <b>9</b></span>
+    <span class="chip">今日路由 <b>1,284</b></span>
+    <span class="chip">平均延迟 <b>48ms</b></span>
+  </section>
+
+  <section class="sticky" aria-label="池状态">
+    <div class="pool">
+      <strong>默认池 · default</strong>
+      <span>容量 14 · 可用 11 · 冷却 2 · 封禁 1</span>
+      <span>策略 sticky · TTL 25m · 命中率 86%</span>
+    </div>
+    <div class="actions">
+      <button class="btn" type="button">刷新</button>
+      <button class="btn primary" type="button">取号</button>
+    </div>
+  </section>
+
+  <section class="grid" aria-label="实例">
+    <article class="card">
+      <h2>实例 A <span class="id">wp-a3f1</span></h2>
+      <div class="tags">
+        <span class="tag ok">在线</span>
+        <span class="tag">sticky</span>
+        <span class="tag">us-west</span>
+      </div>
+      <dl class="kv">
+        <dt>出口 IP</dt><dd>104.28.12.44</dd>
+        <dt>会话</dt><dd>sess_7c2e · 剩余 18m</dd>
+        <dt>负载</dt><dd>3 / 8 · CPU 12%</dd>
+        <dt>最近</dt><dd>路由成功 · 41ms</dd>
+      </dl>
+    </article>
+    <article class="card">
+      <h2>实例 B <span class="id">wp-b90c</span></h2>
+      <div class="tags">
+        <span class="tag warn">降级</span>
+        <span class="tag">冷却</span>
+        <span class="tag">us-west</span>
+      </div>
+      <dl class="kv">
+        <dt>出口 IP</dt><dd>162.159.128.7</dd>
+        <dt>会话</dt><dd>sess_1ad9 · 冷却 6m</dd>
+        <dt>负载</dt><dd>0 / 8 · CPU 2%</dd>
+        <dt>最近</dt><dd>429 节流 · 重试 2</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h3>IP 历史</h3>
+      <table>
+        <thead><tr><th>时间</th><th>IP</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td class="mono muted">14:28</td><td class="mono">104.28.12.44</td><td>绑定 · wp-a3f1</td></tr>
+          <tr><td class="mono muted">14:11</td><td class="mono">162.159.128.7</td><td>冷却 · 429</td></tr>
+          <tr><td class="mono muted">13:52</td><td class="mono">198.18.0.21</td><td>释放 · 空闲</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h3>路由日志</h3>
+      <table>
+        <thead><tr><th>时间</th><th>请求</th><th>实例</th><th>耗时</th></tr></thead>
+        <tbody>
+          <tr><td class="mono muted">14:32:11</td><td class="mono">GET /v1/chat</td><td class="mono">wp-a3f1</td><td class="mono">41ms</td></tr>
+          <tr><td class="mono muted">14:31:58</td><td class="mono">POST /v1/completions</td><td class="mono">wp-a3f1</td><td class="mono">63ms</td></tr>
+          <tr><td class="mono muted">14:31:40</td><td class="mono">GET /health</td><td class="mono">wp-b90c</td><td class="mono">12ms</td></tr>
+          <tr><td class="mono muted">14:30:02</td><td class="mono">POST /v1/chat</td><td class="mono">wp-b90c</td><td class="mono">429</td></tr>
+          <tr><td class="mono muted">14:29:17</td><td class="mono">GET /v1/models</td><td class="mono">wp-a3f1</td><td class="mono">28ms</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+</body>
+</html>

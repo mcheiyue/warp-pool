@@ -220,7 +220,8 @@ func runAggregate(args []string) {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		go serveSocks(c, &rr, getBackends, getSticky, getAggEnabled)
+		routeLog := filepath.Join(stateDir, "route.jsonl")
+		go serveSocks(c, &rr, getBackends, getSticky, getAggEnabled, routeLog)
 	}
 }
 
@@ -252,9 +253,53 @@ func loadAggEnabled(path string) bool {
 	return true
 }
 
-func serveSocks(client net.Conn, rr *uint64, get func() []backend, getSticky func() *stickyState, getAgg func() bool) {
+func clientHost(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	s := addr.String()
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		return h
+	}
+	return s
+}
+
+var routeLogMu sync.Mutex
+
+// appendRouteLog records one successful aggregate selection (not byte counters).
+func appendRouteLog(path, src, target string, backendID int, via string) {
+	if path == "" {
+		return
+	}
+	line := fmt.Sprintf(`{"ts":"%s","src":%q,"target":%q,"backend_id":%d,"via":%q}`+"\n",
+		time.Now().UTC().Format(time.RFC3339), src, target, backendID, via)
+	routeLogMu.Lock()
+	defer routeLogMu.Unlock()
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line)
+	_ = f.Close()
+	// cheap trim: if > ~2MB keep last 1500 lines
+	if st, err := os.Stat(path); err == nil && st.Size() > 2<<20 {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(b), "\n")
+		if len(lines) > 1500 {
+			keep := strings.Join(lines[len(lines)-1500:], "\n")
+			_ = os.WriteFile(path, []byte(keep), 0o644)
+		}
+	}
+}
+
+func serveSocks(client net.Conn, rr *uint64, get func() []backend, getSticky func() *stickyState, getAgg func() bool, routeLog string) {
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
+	src := clientHost(client.RemoteAddr())
 
 	buf := make([]byte, 258)
 	if _, err := io.ReadFull(client, buf[:2]); err != nil {
@@ -329,6 +374,7 @@ func serveSocks(client net.Conn, rr *uint64, get func() []backend, getSticky fun
 			}
 			remote, err := dialViaSocks(b.Addr, target)
 			if err == nil {
+				appendRouteLog(routeLog, src, target, b.ID, "sticky")
 				_, _ = client.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 				_ = client.SetDeadline(time.Time{})
 				_ = remote.SetDeadline(time.Time{})
@@ -349,6 +395,7 @@ func serveSocks(client net.Conn, rr *uint64, get func() []backend, getSticky fun
 			lastErr = err
 			continue
 		}
+		appendRouteLog(routeLog, src, target, b.ID, "rr")
 		_, _ = client.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		_ = client.SetDeadline(time.Time{})
 		_ = remote.SetDeadline(time.Time{})
@@ -532,6 +579,37 @@ func runControl(args []string) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	})
+	mux.HandleFunc("/ip-history", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		id := intFrom(r.URL.Query().Get("id"))
+		limit := intFrom(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		writeJSON(w, readIPHistory(data, id, limit))
+	})
+	mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		limit := intFrom(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 100
+		}
+		writeJSON(w, readJSONLTail(filepath.Join(data, "state", "route.jsonl"), limit))
 	})
 	mux.HandleFunc("/rotate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -806,6 +884,47 @@ func intFrom(v any) int {
 		return n
 	default:
 		return 0
+	}
+}
+
+// readJSONLTail returns last n JSON objects from a jsonl file (newest last).
+func readJSONLTail(path string, limit int) []map[string]any {
+	if limit <= 0 {
+		limit = 100
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return []map[string]any{}
+	}
+	rawLines := strings.Split(string(b), "\n")
+	var lines []string
+	for _, ln := range rawLines {
+		ln = strings.TrimSpace(ln)
+		if ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	out := make([]map[string]any, 0, len(lines))
+	for _, ln := range lines {
+		var m map[string]any
+		if json.Unmarshal([]byte(ln), &m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func readIPHistory(data string, id, limit int) map[string]any {
+	if id < 0 {
+		return map[string]any{"id": id, "entries": []any{}}
+	}
+	path := filepath.Join(data, "instances", strconv.Itoa(id), "ip-history.jsonl")
+	return map[string]any{
+		"id":      id,
+		"entries": readJSONLTail(path, limit),
 	}
 }
 

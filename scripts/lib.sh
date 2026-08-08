@@ -225,6 +225,22 @@ is_pool_eligible() {
   [ "$pooled" = "true" ]
 }
 
+# Append one IP change line (rotate success). Keeps last ~200 lines.
+append_ip_history() {
+  local id="$1" old_ip="$2" new_ip="$3" reason="${4:-rotate}"
+  local f tmp dir
+  dir="$(instance_dir "$id")"
+  mkdir -p "$dir"
+  f="${dir}/ip-history.jsonl"
+  printf '{"ts":"%s","old":"%s","new":"%s","reason":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${old_ip}" "${new_ip}" "${reason}" >>"$f" || true
+  # trim tail
+  if [ -f "$f" ]; then
+    tmp="${f}.tmp.$$"
+    tail -n 200 "$f" >"$tmp" 2>/dev/null && mv "$tmp" "$f" || rm -f "$tmp"
+  fi
+}
+
 # Numeric instance ids under DATA_DIR/instances (source of truth after hot-add).
 # Fallback: 0..WARP_INSTANCES-1 when no dirs yet (boot).
 list_instance_ids() {

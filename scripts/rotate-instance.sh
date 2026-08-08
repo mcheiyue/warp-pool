@@ -110,6 +110,9 @@ rotate_one() {
   jq '.pooled=false | .exclude_reason="drain"' "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
+  local old_ip
+  old_ip="$(jq -r '.v4 // .ip // empty' "$meta" 2>/dev/null || true)"
+
   _rotate_cycle "$id" "$MODE"
   attempts=1
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -122,6 +125,8 @@ rotate_one() {
   fi
 
   if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
+    append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:${MODE}"
+    old_ip="$_ROTATE_IP"
     log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} unique=true attempts=${attempts}"
     SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
     return 0
@@ -129,6 +134,7 @@ rotate_one() {
 
   if [ "${V4_UNIQUE}" = "0" ]; then
     write_meta "$id" true "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" true
+    append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:${MODE}"
     log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} (V4_UNIQUE=0)"
     SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
     return 0
@@ -147,6 +153,7 @@ rotate_one() {
       continue
     fi
     if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
+      append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:restart"
       log "instance ${id}: rotate ok mode=restart v4=${_ROTATE_IP} unique=true attempts=${attempts}"
       SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
       return 0
@@ -164,6 +171,7 @@ rotate_one() {
       continue
     fi
     if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
+      append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:hard"
       log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} unique=true attempts=${attempts}"
       SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
       return 0
@@ -179,10 +187,13 @@ rotate_one() {
 }
 
 if [ "$TARGET" = "all" ]; then
-  n="${WARP_INSTANCES:-2}"
-  for ((i = 0; i < n; i++)); do
+  mapfile -t _ids < <(list_instance_ids)
+  local_i=0
+  local_n="${#_ids[@]}"
+  for i in "${_ids[@]}"; do
     rotate_one "$i" || true
-    if [ "$i" -lt $((n - 1)) ]; then
+    local_i=$((local_i + 1))
+    if [ "$local_i" -lt "$local_n" ]; then
       sleep "$GAP"
     fi
   done
