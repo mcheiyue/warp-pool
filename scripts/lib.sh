@@ -225,6 +225,30 @@ is_pool_eligible() {
   [ "$pooled" = "true" ]
 }
 
+# Numeric instance ids under DATA_DIR/instances (source of truth after hot-add).
+# Fallback: 0..WARP_INSTANCES-1 when no dirs yet (boot).
+list_instance_ids() {
+  local ids=() d base n id
+  if [ -d "${DATA_DIR}/instances" ]; then
+    for d in "${DATA_DIR}/instances"/*; do
+      [ -d "$d" ] || continue
+      base="$(basename "$d")"
+      [[ "$base" =~ ^[0-9]+$ ]] || continue
+      ids+=("$base")
+    done
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    n="${WARP_INSTANCES:-2}"
+    for ((id = 0; id < n; id++)); do
+      ids+=("$id")
+    done
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    return 0
+  fi
+  printf '%s\n' "${ids[@]}" | sort -n
+}
+
 # return 0 = conflict with another healthy instance; 1 = unique or disabled
 v4_conflicts() {
   local id="$1"

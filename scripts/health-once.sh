@@ -4,14 +4,16 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-N="${WARP_INSTANCES:-2}"
 FAILURES_THR="${HEALTH_FAILURES:-3}"
 AUTO_ROTATE="${HEALTH_AUTO_ROTATE:-0}"
 
 mkdir -p "${DATA_DIR}/state" "${PID_DIR}"
 backends_json="[]"
 
-for ((id = 0; id < N; id++)); do
+# Do NOT trust boot-time WARP_INSTANCES alone — health-loop keeps a stale copy
+# after POST /instances hot-add. Discover ids from /data/instances.
+while read -r id; do
+  [ -n "$id" ] || continue
   dir="$(instance_dir "$id")"
   [ -d "$dir" ] || continue
   meta="${dir}/meta.json"
@@ -79,7 +81,7 @@ for ((id = 0; id < N; id++)); do
       bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-restart}" || true
     fi
   fi
-done
+done < <(list_instance_ids)
 
 echo "{\"backends\": ${backends_json}}" | jq -c . > "${DATA_DIR}/state/healthy.json"
 log "healthy.json updated: $(cat "${DATA_DIR}/state/healthy.json")"
