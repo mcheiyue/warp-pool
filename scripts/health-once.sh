@@ -54,11 +54,16 @@ for ((id = 0; id < N; id++)); do
       else
         write_meta "$id" true "$ip" 0 "$last_rotate" "$(cat "$pidfile")" "" true
         release_unique_lock
-        backends_json="$(echo "$backends_json" | jq -c \
-          --argjson id "$id" \
-          --arg addr "$(socks_addr "$id")" \
-          '. + [{id:$id, addr:$addr}]')"
-        log "instance ${id}: healthy v4=${ip} unique=true socks=$(socks_addr "$id")"
+        # probe/healthy meta 与是否进 backends 解耦：unpool 仍可 healthy+直连
+        if is_pool_eligible "$id"; then
+          backends_json="$(echo "$backends_json" | jq -c \
+            --argjson id "$id" \
+            --arg addr "$(socks_addr "$id")" \
+            '. + [{id:$id, addr:$addr}]')"
+          log "instance ${id}: healthy v4=${ip} unique=true pooled socks=$(socks_addr "$id")"
+        else
+          log "instance ${id}: healthy v4=${ip} unique=true but not pooled — skip backends"
+        fi
       fi
     else
       # lock busy (rotate committing): keep out of pool this pass

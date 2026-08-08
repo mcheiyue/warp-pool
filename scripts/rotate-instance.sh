@@ -18,6 +18,23 @@ case "$MODE" in
   *) err "unknown mode: $MODE (use restart|hard)"; exit 2 ;;
 esac
 
+# restore pooled after temporary rotate drain (RETURN trap)
+_restore_rotate_drain() {
+  local id="$1"
+  local prev="$2"
+  local meta tmp
+  meta="$(instance_dir "$id")/meta.json"
+  [ -f "$meta" ] || return 0
+  tmp="${meta}.tmp.$$"
+  if [ "$prev" = "true" ]; then
+    jq '.pooled=true | .exclude_reason=""' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
+  else
+    # keep unpooled; only clear our drain marker
+    jq '.pooled=false | if .exclude_reason=="drain" then .exclude_reason="" else . end' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
+  fi
+  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+}
+
 # stop + optional wipe + ensure + start; sets ok/ip for caller via namerefs-ish globals
 _rotate_cycle() {
   local id="$1"
@@ -76,15 +93,21 @@ rotate_one() {
   fi
 
   local lock="${PID_DIR}/rotate-${id}.lock"
+  local prev_pooled
   mkdir -p "${PID_DIR}"
   echo $$ > "$lock"
+
+  # temporary unpool (drain) so rotate leaves healthy.json backends mid-work
+  prev_pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
   # shellcheck disable=SC2064
-  trap "rm -f '$lock'; release_unique_lock 2>/dev/null || true" RETURN
+  trap "rm -f '$lock'; release_unique_lock 2>/dev/null || true; _restore_rotate_drain '$id' '$prev_pooled'" RETURN
 
   export SUPERVISE_RESTART=0
 
   write_meta "$id" false "" "$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)" \
     "$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)" "" "" false
+  # write_meta merges pooled; force drain after so mid-rotate stays out of pool
+  jq '.pooled=false | .exclude_reason="drain"' "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
   _rotate_cycle "$id" "$MODE"

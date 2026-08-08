@@ -134,6 +134,10 @@ wcli() {
     warp-cli --accept-tos "$@"
 }
 
+# write_meta id healthy v4 [failures] [last_rotate] [pid] [v6] [unique] [pooled] [exclude_reason]
+# Runtime fields always overwrite. Ops fields pooled/exclude_reason:
+#   - if arg 9/10 provided → set explicitly
+#   - else merge from existing meta (missing pooled → true)
 write_meta() {
   local id="$1"
   local healthy="${2:-false}"
@@ -144,9 +148,31 @@ write_meta() {
   local v6="${7:-}"
   local unique="${8:-}"
   local dir meta
+  local pooled="true"
+  local exclude_reason=""
+  local set_pooled=0 set_exclude=0
   dir="$(instance_dir "$id")"
   mkdir -p "$dir"
   meta="${dir}/meta.json"
+  if [ "$#" -ge 9 ]; then
+    set_pooled=1
+  fi
+  if [ "$#" -ge 10 ]; then
+    set_exclude=1
+  fi
+  if [ -f "$meta" ]; then
+    pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
+    exclude_reason="$(jq -r '.exclude_reason // empty' "$meta" 2>/dev/null || true)"
+  fi
+  if [ "$set_pooled" -eq 1 ]; then
+    case "${9}" in
+      true|TRUE|1|yes|YES) pooled="true" ;;
+      *) pooled="false" ;;
+    esac
+  fi
+  if [ "$set_exclude" -eq 1 ]; then
+    exclude_reason="${10}"
+  fi
   if [ -z "$unique" ]; then
     if [ "$healthy" = "true" ] && [ -n "$v4" ]; then
       unique="true"
@@ -154,6 +180,8 @@ write_meta() {
       unique="false"
     fi
   fi
+  local pooled_json="true"
+  [ "$pooled" = "true" ] || pooled_json="false"
   jq -n \
     --argjson id "$id" \
     --argjson healthy "$healthy" \
@@ -164,18 +192,37 @@ write_meta() {
     --arg last_rotate "$last_rotate" \
     --arg pid "$pid" \
     --argjson unique "$unique" \
+    --argjson pooled "$pooled_json" \
+    --arg exclude_reason "$exclude_reason" \
     --argjson port "$(instance_port "$id")" \
     --argjson expose "$(expose_port "$id")" \
     --arg mode "warp" \
     --arg netns "$(ns_name "$id")" \
     --arg socks "$(socks_addr "$id")" \
     '{
-      id:$id, healthy:$healthy, unique:$unique, v4:$v4, v6:$v6, ip:$ip,
+      id:$id, healthy:$healthy, unique:$unique, pooled:$pooled, exclude_reason:$exclude_reason,
+      v4:$v4, v6:$v6, ip:$ip,
       failures:$failures, last_rotate:$last_rotate, pid:$pid,
       port:$port, expose:$expose, mode:$mode, netns:$netns, socks:$socks,
       updated:(now|todate)
     }' > "${meta}.tmp"
   mv "${meta}.tmp" "$meta"
+}
+
+# return 0 = may enter healthy.json backends; 1 = skip backends
+# pooled missing → true; rotate lock → not eligible
+is_pool_eligible() {
+  local id="$1"
+  local meta pooled
+  if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
+    return 1
+  fi
+  meta="$(instance_dir "$id")/meta.json"
+  if [ ! -f "$meta" ]; then
+    return 0
+  fi
+  pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
+  [ "$pooled" = "true" ]
 }
 
 # return 0 = conflict with another healthy instance; 1 = unique or disabled

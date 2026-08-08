@@ -98,6 +98,12 @@ type backend struct {
 	Addr string `json:"addr"`
 }
 
+// stickyState is global sticky routing; missing file = RR.
+type stickyState struct {
+	ID int    `json:"id"`
+	TS string `json:"ts"`
+}
+
 func loadHealthy(path string) ([]backend, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -134,10 +140,24 @@ func runAggregate(args []string) {
 		}
 	}
 
+	stateDir := filepath.Dir(healthy)
+	stickyPath := filepath.Join(stateDir, "sticky.json")
+	aggPath := filepath.Join(stateDir, "agg_enabled")
+
 	var rr uint64
 	var mu sync.Mutex
 	var cached []backend
 	var cachedAt time.Time
+
+	var stickyMu sync.Mutex
+	var stickyCached *stickyState
+	var stickyCachedAt time.Time
+	var stickyLoaded bool
+
+	var aggMu sync.Mutex
+	var aggCached bool
+	var aggCachedAt time.Time
+	var aggLoaded bool
 
 	getBackends := func() []backend {
 		mu.Lock()
@@ -154,6 +174,40 @@ func runAggregate(args []string) {
 		return append([]backend(nil), cached...)
 	}
 
+	getSticky := func() *stickyState {
+		stickyMu.Lock()
+		defer stickyMu.Unlock()
+		if stickyLoaded && time.Since(stickyCachedAt) < 2*time.Second {
+			if stickyCached == nil {
+				return nil
+			}
+			cp := *stickyCached
+			return &cp
+		}
+		st, err := loadSticky(stickyPath)
+		stickyCachedAt = time.Now()
+		stickyLoaded = true
+		if err != nil {
+			stickyCached = nil
+			return nil
+		}
+		stickyCached = st
+		cp := *st
+		return &cp
+	}
+
+	getAggEnabled := func() bool {
+		aggMu.Lock()
+		defer aggMu.Unlock()
+		if aggLoaded && time.Since(aggCachedAt) < 2*time.Second {
+			return aggCached
+		}
+		aggCached = loadAggEnabled(aggPath)
+		aggCachedAt = time.Now()
+		aggLoaded = true
+		return aggCached
+	}
+
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		log.Fatalf("aggregate listen: %v", err)
@@ -166,11 +220,39 @@ func runAggregate(args []string) {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		go serveSocks(c, &rr, getBackends)
+		go serveSocks(c, &rr, getBackends, getSticky, getAggEnabled)
 	}
 }
 
-func serveSocks(client net.Conn, rr *uint64, get func() []backend) {
+func loadSticky(path string) (*stickyState, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var st stickyState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return nil, err
+	}
+	if st.ID < 0 {
+		return nil, errors.New("invalid sticky id")
+	}
+	return &st, nil
+}
+
+// loadAggEnabled: missing file = enabled (true); content "0"/"false" = off.
+func loadAggEnabled(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return true
+	}
+	s := strings.TrimSpace(string(b))
+	if s == "0" || strings.EqualFold(s, "false") {
+		return false
+	}
+	return true
+}
+
+func serveSocks(client net.Conn, rr *uint64, get func() []backend, getSticky func() *stickyState, getAgg func() bool) {
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 
@@ -228,10 +310,33 @@ func serveSocks(client net.Conn, rr *uint64, get func() []backend) {
 	port = binary.BigEndian.Uint16(buf[:2])
 	target := net.JoinHostPort(host, strconv.Itoa(int(port)))
 
+	if !getAgg() {
+		_, _ = client.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
 	backends := get()
 	if len(backends) == 0 {
 		_, _ = client.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
+	}
+
+	// sticky: try matching backend first; dial fail or missing → RR
+	if st := getSticky(); st != nil {
+		for _, b := range backends {
+			if b.ID != st.ID {
+				continue
+			}
+			remote, err := dialViaSocks(b.Addr, target)
+			if err == nil {
+				_, _ = client.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				_ = client.SetDeadline(time.Time{})
+				_ = remote.SetDeadline(time.Time{})
+				relay(client, remote)
+				return
+			}
+			break
+		}
 	}
 
 	var lastErr error
@@ -522,6 +627,35 @@ func runControl(args []string) {
 		}
 		writeJSON(w, map[string]any{"ok": true, "output": string(out)})
 	})
+	mux.HandleFunc("/pool", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, readPool(data))
+	})
+	mux.HandleFunc("/pool/membership", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		handlePoolMembership(w, r, data, scripts)
+	})
+	mux.HandleFunc("/pool/sticky", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r, token) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		handlePoolSticky(w, r, data)
+	})
 
 	// single-page UI — no auth needed (static HTML; API calls handle auth via token param)
 	indexPath := filepath.Join(webRoot, "index.html")
@@ -645,22 +779,262 @@ func readInstances(data string) []map[string]any {
 			_ = json.Unmarshal(b, &m)
 			m["id"] = id
 		}
+		// old meta without pooled key → default true
+		if _, ok := m["pooled"]; !ok {
+			m["pooled"] = true
+		}
 		out = append(out, m)
 	}
 	return out
+}
+
+func intFrom(v any) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case float32:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(x))
+		return n
+	default:
+		return 0
+	}
+}
+
+func appendPoolLog(data, msg string) {
+	dir := filepath.Join(data, "logs")
+	_ = os.MkdirAll(dir, 0o755)
+	line := time.Now().UTC().Format(time.RFC3339) + " " + msg + "\n"
+	f, err := os.OpenFile(filepath.Join(dir, "pool.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line)
+	_ = f.Close()
+}
+
+func stickyPath(data string) string {
+	return filepath.Join(data, "state", "sticky.json")
+}
+
+func aggEnabledPath(data string) string {
+	return filepath.Join(data, "state", "agg_enabled")
+}
+
+func boolFrom(v any) (bool, bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case float64:
+		return x != 0, true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(x))
+		if s == "1" || s == "true" {
+			return true, true
+		}
+		if s == "0" || s == "false" {
+			return false, true
+		}
+		return false, false
+	default:
+		return false, false
+	}
+}
+
+func readPool(data string) map[string]any {
+	healthyPath := filepath.Join(data, "state", "healthy.json")
+	backends, _ := loadHealthy(healthyPath)
+	inst := readInstances(data)
+	byID := map[int]map[string]any{}
+	for _, it := range inst {
+		id := intFrom(it["id"])
+		byID[id] = it
+	}
+	memberIDs := map[int]bool{}
+	members := make([]map[string]any, 0, len(backends))
+	for _, b := range backends {
+		memberIDs[b.ID] = true
+		m := map[string]any{"id": b.ID, "addr": b.Addr, "pooled": true}
+		if meta, ok := byID[b.ID]; ok {
+			if v4, ok := meta["v4"]; ok {
+				m["v4"] = v4
+			}
+			if p, ok := meta["pooled"]; ok {
+				m["pooled"] = p
+			}
+		}
+		members = append(members, m)
+	}
+	excluded := make([]map[string]any, 0)
+	for _, it := range inst {
+		id := intFrom(it["id"])
+		if memberIDs[id] {
+			continue
+		}
+		ex := map[string]any{"id": id, "pooled": it["pooled"], "healthy": it["healthy"]}
+		if v4, ok := it["v4"]; ok {
+			ex["v4"] = v4
+		}
+		reason := ""
+		if r, ok := it["exclude_reason"].(string); ok && r != "" {
+			reason = r
+		} else if p, ok := it["pooled"].(bool); ok && !p {
+			reason = "manual"
+		} else if h, ok := it["healthy"].(bool); ok && !h {
+			reason = "unhealthy"
+		}
+		ex["reason"] = reason
+		excluded = append(excluded, ex)
+	}
+	var sticky any
+	if st, err := loadSticky(stickyPath(data)); err == nil && st != nil {
+		sticky = st
+	} else {
+		sticky = nil
+	}
+	listen := envOr("AGG_SOCKS_PORT", ":1080")
+	// AGG_SOCKS_PORT may be bare port; keep as-is for display
+	return map[string]any{
+		"enabled":  loadAggEnabled(aggEnabledPath(data)),
+		"strategy": "rr",
+		"listen":   listen,
+		"sticky":   sticky,
+		"members":  members,
+		"excluded": excluded,
+		"ts":       time.Now().UTC().Format(time.RFC3339),
+	}
+}
+
+func handlePoolMembership(w http.ResponseWriter, r *http.Request, data, scripts string) {
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	id := intFrom(body["id"])
+	pooled, ok := boolFrom(body["pooled"])
+	if !ok {
+		http.Error(w, "missing pooled", http.StatusBadRequest)
+		return
+	}
+	instDir := filepath.Join(data, "instances", strconv.Itoa(id))
+	if st, err := os.Stat(instDir); err != nil || !st.IsDir() {
+		http.Error(w, "instance not found", http.StatusNotFound)
+		return
+	}
+	metaPath := filepath.Join(instDir, "meta.json")
+	meta := map[string]any{}
+	if b, err := os.ReadFile(metaPath); err == nil {
+		_ = json.Unmarshal(b, &meta)
+	}
+	meta["id"] = id
+	meta["pooled"] = pooled
+	reason := ""
+	if !pooled {
+		reason = "manual"
+		if rsn, ok := body["reason"].(string); ok && strings.TrimSpace(rsn) != "" {
+			reason = strings.TrimSpace(rsn)
+		}
+	}
+	meta["exclude_reason"] = reason
+	raw, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(metaPath, raw, 0o644); err != nil {
+		http.Error(w, "write meta: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// refresh healthy.json without supervising restarts
+	script := filepath.Join(scripts, "health-once.sh")
+	cmd := exec.Command("/bin/bash", script)
+	cmd.Env = append(os.Environ(), "SUPERVISE_RESTART=0")
+	out, err := cmd.CombinedOutput()
+	appendPoolLog(data, fmt.Sprintf("membership id=%d pooled=%v reason=%q health_err=%v", id, pooled, reason, err))
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]any{
+			"ok": false, "id": id, "pooled": pooled,
+			"error": err.Error(), "output": string(out),
+		})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "id": id, "pooled": pooled, "exclude_reason": reason})
+}
+
+func handlePoolSticky(w http.ResponseWriter, r *http.Request, data string) {
+	path := stickyPath(data)
+	switch r.Method {
+	case http.MethodGet:
+		st, err := loadSticky(path)
+		if err != nil || st == nil {
+			writeJSON(w, map[string]any{"id": nil})
+			return
+		}
+		writeJSON(w, st)
+	case http.MethodPost:
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		id := intFrom(body["id"])
+		if id < 0 {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		// require instance dir; not required to be in backends
+		instDir := filepath.Join(data, "instances", strconv.Itoa(id))
+		if st, err := os.Stat(instDir); err != nil || !st.IsDir() {
+			http.Error(w, "instance not found", http.StatusNotFound)
+			return
+		}
+		if err := os.MkdirAll(filepath.Join(data, "state"), 0o755); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		st := stickyState{ID: id, TS: time.Now().UTC().Format(time.RFC3339)}
+		raw, err := json.MarshalIndent(st, "", "  ")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			http.Error(w, "write: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		appendPoolLog(data, fmt.Sprintf("sticky set id=%d", id))
+		writeJSON(w, map[string]any{"ok": true, "id": id, "ts": st.TS})
+	case http.MethodDelete:
+		_ = os.Remove(path)
+		appendPoolLog(data, "sticky cleared")
+		writeJSON(w, map[string]any{"ok": true, "id": nil})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // --- hot config (WP-D skeleton) ---
 
 // env keys allowed via PUT /config (JSON snake_case → ENV)
 var configWhitelist = map[string]string{
-	"rotate_cooldown":         "ROTATE_COOLDOWN",
-	"health_auto_rotate":      "HEALTH_AUTO_ROTATE",
-	"v4_unique":               "V4_UNIQUE",
-	"v4_unique_retries":       "V4_UNIQUE_RETRIES",
-	"v4_unique_hard_retries":  "V4_UNIQUE_HARD_RETRIES",
-	"v4_unique_backoff":       "V4_UNIQUE_BACKOFF",
-	"rotate_mode":             "ROTATE_MODE",
+	"rotate_cooldown":        "ROTATE_COOLDOWN",
+	"health_auto_rotate":     "HEALTH_AUTO_ROTATE",
+	"v4_unique":              "V4_UNIQUE",
+	"v4_unique_retries":      "V4_UNIQUE_RETRIES",
+	"v4_unique_hard_retries": "V4_UNIQUE_HARD_RETRIES",
+	"v4_unique_backoff":      "V4_UNIQUE_BACKOFF",
+	"rotate_mode":            "ROTATE_MODE",
+	"agg_enabled":            "AGG_ENABLED",
 }
 
 func runtimeConfigPath(data string) string {
@@ -680,16 +1054,17 @@ func envOr(k, def string) string {
 
 func getConfig(listen, token string) map[string]any {
 	return map[string]any{
-		"warp_instances":          envOr("WARP_INSTANCES", "0"),
-		"rotate_cooldown":         envOr("ROTATE_COOLDOWN", "300"),
-		"rotate_mode":             envOr("ROTATE_MODE", "restart"),
-		"v4_unique":               envOr("V4_UNIQUE", "1"),
-		"v4_unique_retries":       envOr("V4_UNIQUE_RETRIES", "3"),
-		"v4_unique_hard_retries":  envOr("V4_UNIQUE_HARD_RETRIES", "1"),
-		"v4_unique_backoff":       envOr("V4_UNIQUE_BACKOFF", "5"),
-		"health_auto_rotate":      envOr("HEALTH_AUTO_ROTATE", "0"),
-		"control_bind":            envOr("CONTROL_BIND", listen),
-		"token_set":               strings.TrimSpace(token) != "",
+		"warp_instances":         envOr("WARP_INSTANCES", "0"),
+		"rotate_cooldown":        envOr("ROTATE_COOLDOWN", "300"),
+		"rotate_mode":            envOr("ROTATE_MODE", "restart"),
+		"v4_unique":              envOr("V4_UNIQUE", "1"),
+		"v4_unique_retries":      envOr("V4_UNIQUE_RETRIES", "3"),
+		"v4_unique_hard_retries": envOr("V4_UNIQUE_HARD_RETRIES", "1"),
+		"v4_unique_backoff":      envOr("V4_UNIQUE_BACKOFF", "5"),
+		"health_auto_rotate":     envOr("HEALTH_AUTO_ROTATE", "0"),
+		"agg_enabled":            envOr("AGG_ENABLED", "1"),
+		"control_bind":           envOr("CONTROL_BIND", listen),
+		"token_set":              strings.TrimSpace(token) != "",
 	}
 }
 
@@ -705,6 +1080,14 @@ func applyRuntimeConfig(data string) error {
 	for k, envKey := range configWhitelist {
 		if v, ok := m[k]; ok {
 			_ = os.Setenv(envKey, fmt.Sprint(v))
+			if k == "agg_enabled" {
+				val := "0"
+				if on, ok := boolFrom(v); ok && on {
+					val = "1"
+				}
+				_ = os.MkdirAll(filepath.Join(data, "state"), 0o755)
+				_ = os.WriteFile(aggEnabledPath(data), []byte(val), 0o644)
+			}
 		}
 	}
 	return nil
@@ -731,6 +1114,20 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request, data, listen, token
 		s := fmt.Sprint(v)
 		_ = os.Setenv(envKey, s)
 		applied[k] = v
+		if k == "agg_enabled" {
+			// cross-process flag for aggregate; file "0"/"1", missing=on
+			val := "0"
+			if on, ok := boolFrom(v); ok && on {
+				val = "1"
+			} else if !ok {
+				// bare "1"/"0" already covered by boolFrom strings; fallback
+				if strings.TrimSpace(s) == "1" {
+					val = "1"
+				}
+			}
+			_ = os.MkdirAll(filepath.Join(data, "state"), 0o755)
+			_ = os.WriteFile(aggEnabledPath(data), []byte(val), 0o644)
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(data, "state"), 0o755); err != nil {
 		http.Error(w, "state dir: "+err.Error(), http.StatusInternalServerError)

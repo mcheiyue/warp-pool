@@ -1,8 +1,21 @@
 # STATUS — warp-pool
 
-**Primary: v0.4** — [pivot-v0.4.md](./pivot-v0.4.md) · ADR-016  
+**Primary (code): v0.5 可控聚合池** — [pivot-v0.5-aggregate-pool.md](./pivot-v0.5-aggregate-pool.md) · [plan](../.omo/plans/v0.5-aggregate-pool.md)  
+**Shipped baseline: v0.4** — [pivot-v0.4.md](./pivot-v0.4.md) · ADR-016  
 **Baseline: v0.3** shipped  
-Date: 2026-08-07
+Date: 2026-08-08
+
+## v0.5 — code done（待 GHCR 发布 / 现网旁路 smoke）
+
+| 项 | 状态 |
+|----|------|
+| write_meta merge + is_pool_eligible | ✅ lib.sh |
+| health-once backends 门禁 | ✅ |
+| GET/POST /pool* + sticky 选路 + agg_enabled 文件 | ✅ main.go（`go build`/`go vet` 本地 PASS） |
+| WebUI 入池/粘性/聚合面板 | ✅ |
+| rotate 临时 drain | ✅ |
+| tests/smoke-pool.sh | ✅（需对运行中控制面执行） |
+| GHCR 镜像 | ⏳ push/tag 等用户确认；**不在 VPS build**，走 `.github/workflows/docker-publish.yml` |
 
 ## v0.4 — done
 

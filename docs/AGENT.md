@@ -231,9 +231,23 @@ Query：
 
 立即执行一轮 `health-once`。
 
-### 5.8 `GET /ui/` · `GET /`
+### 5.8 聚合池 v0.5：`/pool*`
 
-静态 WebUI。
+业务默认只连聚合 SOCKS。成员可控 + 全局粘性：
+
+| 方法 | 路径 | body | 说明 |
+|------|------|------|------|
+| GET | `/pool` | — | members（backends+join v4）、excluded、sticky、strategy |
+| POST | `/pool/membership` | `{"id":1,"pooled":false}` | 出池/入池；写 meta 后 `SUPERVISE_RESTART=0 health-once` |
+| GET/POST/DELETE | `/pool/sticky` | POST `{"id":0}` | 全局粘性；DELETE 回 RR；sticky id 不在 backends 时选路回退 RR |
+
+- meta 字段：`pooled`（缺省 true）、`exclude_reason`（`manual`/`drain`/空）  
+- `write_meta` **merge** 运维字段，health-once 不会抹掉 unpool  
+- `PUT /config` 可写 `agg_enabled`（同步 `/data/state/agg_enabled` 文件，aggregate 进程 ≤2s 读）
+
+### 5.9 `GET /ui/` · `GET /`
+
+静态 WebUI（v0.5：入池开关、固定到此、聚合面板）。
 
 ---
 
@@ -248,6 +262,20 @@ curl -sS -H "$AUTH" "$BASE/health"
 
 # 列表
 curl -sS -H "$AUTH" "$BASE/instances"
+
+# 聚合池状态
+curl -sS -H "$AUTH" "$BASE/pool"
+
+# 出池 id=1（不杀进程；直连仍可用）
+curl -sS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"id":1,"pooled":false}' "$BASE/pool/membership"
+# 改后 sleep ≥3（aggregate backends 缓存 2s）再测聚合口
+
+# 全局粘性 → 固定走 id=0
+curl -sS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"id":0}' "$BASE/pool/sticky"
+# 清除粘性
+curl -sS -X DELETE -H "$AUTH" "$BASE/pool/sticky"
 
 # 换 IP
 curl -sS -X POST -H "$AUTH" "$BASE/rotate?id=0&mode=restart"
@@ -264,9 +292,9 @@ curl -sS -X POST -H "$AUTH" "$BASE/instances?want=3"
 # 删除 id=2
 curl -sS -X DELETE -H "$AUTH" "$BASE/instances?id=2"
 
-# 改冷却
+# 改冷却 / 关聚合新连接
 curl -sS -X PUT -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"rotate_cooldown":60,"v4_unique":1}' "$BASE/config"
+  -d '{"rotate_cooldown":60,"v4_unique":1,"agg_enabled":1}' "$BASE/config"
 
 # 代理测 IPv4
 curl -4 -sS --max-time 20 --socks5-hostname 127.0.0.1:1080 https://ipv4.icanhazip.com
@@ -283,9 +311,10 @@ curl -4 -sS --max-time 20 --socks5-hostname 127.0.0.1:11000 https://ipv4.icanhaz
 2. N≥2 时：两个直连口（若已映射）`curl -4 ... icanhazip` **经常互异**（允许偶发相同，开启 `V4_UNIQUE` 后冲突应重试）。  
 3. `POST /rotate?id=0` → `ok: true`，随后该实例 `v4` **变化**（或 409 且 attempts 有值）。  
 4. 聚合口 `:1080` 能出网。  
-5. 未映射的业务端口不要误伤；**不要**占用用户未指定的主机端口。
+5. 未映射的业务端口不要误伤；**不要**占用用户未指定的主机端口。  
+6. v0.5：`tests/smoke-pool.sh`（可 `SKIP_SOCKS=1`）unpool/pool/sticky 通过。
 
-自动化脚本参考：`tests/smoke-v04.sh`（通过环境变量注入 `AGG`/`EXPOSE0`/`CTR`/`TOKEN` 等）。
+自动化脚本：`tests/smoke-v04.sh`、`tests/smoke-pool.sh`。
 
 ---
 
@@ -293,10 +322,12 @@ curl -4 -sS --max-time 20 --socks5-hostname 127.0.0.1:11000 https://ipv4.icanhaz
 
 | 路径 | 用途 |
 |------|------|
-| `/data/instances/<id>/` | 每实例 meta、state |
-| `/data/state/healthy.json` | 聚合后端列表 |
-| `/data/state/` 或 runtime config | 热配置（实现以代码为准） |
-| `/data/logs/` | 若启用的滚动日志 |
+| `/data/instances/<id>/` | 每实例 meta（含 `pooled`/`exclude_reason`）、state |
+| `/data/state/healthy.json` | 聚合后端列表（仅 eligible 成员） |
+| `/data/state/sticky.json` | 全局粘性 `{id,ts}`；缺文件=RR |
+| `/data/state/agg_enabled` | `0`/`1`；缺=开 |
+| `/data/state/` runtime-config | 热配置 |
+| `/data/logs/pool.log` | membership/sticky 审计 |
 | `/opt/warp-pool/scripts/` | start/stop/rotate/health |
 | `/opt/warp-pool/web/index.html` | WebUI |
 
