@@ -97,6 +97,10 @@ rotate_one() {
   mkdir -p "${PID_DIR}"
   echo $$ > "$lock"
 
+  # capture old IP BEFORE drain clears meta.v4
+  local old_ip
+  old_ip="$(jq -r '.v4 // .ip // empty' "$meta" 2>/dev/null || true)"
+
   # temporary unpool (drain) so rotate leaves healthy.json backends mid-work
   prev_pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
   # shellcheck disable=SC2064
@@ -109,9 +113,6 @@ rotate_one() {
   # write_meta merges pooled; force drain after so mid-rotate stays out of pool
   jq '.pooled=false | .exclude_reason="drain"' "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
-
-  local old_ip
-  old_ip="$(jq -r '.v4 // .ip // empty' "$meta" 2>/dev/null || true)"
 
   _rotate_cycle "$id" "$MODE"
   attempts=1

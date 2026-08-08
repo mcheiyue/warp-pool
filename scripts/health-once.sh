@@ -20,9 +20,11 @@ while read -r id; do
   pidfile="$(pidfile_svc "$id")"
   failures=0
   last_rotate=""
+  prev_v4=""
   if [ -f "$meta" ]; then
     failures="$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)"
     last_rotate="$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)"
+    prev_v4="$(jq -r '.v4 // .ip // empty' "$meta" 2>/dev/null || true)"
   fi
 
   alive=0
@@ -54,6 +56,13 @@ while read -r id; do
         write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
         log "instance ${id}: v4 collision ${ip} — excluded from healthy.json"
       else
+        # persist IP change on reconnect/boot (not only explicit rotate)
+        if [ -n "$ip" ] && [ -n "$prev_v4" ] && [ "$ip" != "$prev_v4" ]; then
+          append_ip_history "$id" "$prev_v4" "$ip" "probe"
+          log "instance ${id}: ip change ${prev_v4} → ${ip} (probe)"
+        elif [ -n "$ip" ] && [ -z "$prev_v4" ]; then
+          append_ip_history "$id" "" "$ip" "observe"
+        fi
         write_meta "$id" true "$ip" 0 "$last_rotate" "$(cat "$pidfile")" "" true
         release_unique_lock
         # probe/healthy meta 与是否进 backends 解耦：unpool 仍可 healthy+直连

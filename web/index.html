@@ -180,22 +180,25 @@
       background: var(--line); border: 1px solid var(--line); border-radius: var(--r);
     }
     .audit li {
-      display: grid; grid-template-columns: minmax(120px, 150px) 1fr auto;
-      gap: 8px 12px; align-items: center;
-      padding: 9px 12px; background: var(--panel2); font-size: .8rem;
+      display: grid; grid-template-columns: minmax(118px, 140px) 1fr;
+      gap: 6px 12px; align-items: baseline;
+      padding: 8px 12px; background: var(--panel2); font-size: .8rem;
     }
     .audit time { color: var(--muted); font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: .72rem; }
-    .audit .route-main { font-family: var(--mono); font-size: .78rem; word-break: break-all; color: var(--text); }
+    .audit .route-main {
+      font-family: var(--mono); font-size: .78rem; word-break: break-all; color: var(--text);
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+    }
     .audit .route-main .muted { color: var(--muted); }
     .audit-tag {
-      font-size: .7rem; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+      font-size: .65rem; padding: 1px 6px; border-radius: 4px; white-space: nowrap;
       border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+      vertical-align: middle;
     }
     .audit-tag.sticky { color: #fde68a; border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
     .audit-tag.rr { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 35%, var(--line)); }
     @media (max-width: 640px) {
-      .audit li { grid-template-columns: 1fr auto; }
-      .audit time { grid-column: 1 / -1; }
+      .audit li { grid-template-columns: 1fr; }
     }
 
     /* C: IP history table */
@@ -720,18 +723,28 @@
       const tagCls = via === 'sticky' ? 'sticky' : 'rr';
       return '<li>' +
         '<time>' + fmtLocal(r.ts) + '</time>' +
-        '<span class="route-main"><span class="muted">' + (r.src || '?') +
-        '</span> → id=' + r.backend_id + ' · ' + (r.target || '') + '</span>' +
-        '<span class="audit-tag ' + tagCls + '">' + (r.via || 'rr') + '</span>' +
+        '<span class="route-main">' +
+          '<span class="muted">' + (r.src || '?') + '</span>' +
+          '<span>→ id=' + r.backend_id + '</span>' +
+          '<span class="audit-tag ' + tagCls + '">' + (r.via || 'rr') + '</span>' +
+          '<span>' + (r.target || '') + '</span>' +
+        '</span>' +
         '</li>';
     }).join('');
-    box.innerHTML = '<ul class="audit">' + rows + '</ul>';
+    // silent replace — no full-panel "加载中" flash
+    if (box.querySelector('ul.audit')) {
+      box.querySelector('ul.audit').innerHTML = rows;
+    } else {
+      box.className = '';
+      box.innerHTML = '<ul class="audit">' + rows + '</ul>';
+    }
     return true;
   }
 
-  async function loadIPHistory() {
+  async function loadIPHistory(opts) {
     const box = $('hist-box');
     if (!box) return;
+    const showLoading = !opts || opts.loading !== false;
     const filterEl = $('hist-filter');
     const filter = filterEl ? filterEl.value : '';
     let ids = lastInstanceIds.slice();
@@ -744,8 +757,11 @@
       box.textContent = '暂无实例可查';
       return;
     }
-    box.className = 'empty';
-    box.textContent = '加载中…';
+    const hadTable = !!box.querySelector('table.hist');
+    if (showLoading && !hadTable) {
+      box.className = 'empty';
+      box.textContent = '加载中…';
+    }
     const rows = [];
     await Promise.all(ids.map(async (id) => {
       const { res, data } = await api('/ip-history?id=' + id + '&limit=50');
@@ -762,11 +778,10 @@
     }));
     if (!rows.length) {
       box.className = 'empty';
-      box.textContent = (filter === '' ? '全池' : 'id=' + filter) + ' 暂无换 IP 历史（下次换 IP 后写入）';
+      box.textContent = (filter === '' ? '全池' : 'id=' + filter) + ' 暂无换 IP 历史（换 IP / 探测到变化后写入）';
       return;
     }
     rows.sort((a, b) => Date.parse(b.ts || 0) - Date.parse(a.ts || 0));
-    box.className = 'hist-table-wrap';
     const body = rows.map((e) => {
       return '<tr>' +
         '<td class="mono">' + fmtLocal(e.ts) + '</td>' +
@@ -776,10 +791,17 @@
         '<td>' + (e.reason || '—') + '</td>' +
         '</tr>';
     }).join('');
-    box.innerHTML =
+    const html =
       '<table class="hist"><thead><tr>' +
       '<th>时间</th><th>实例</th><th>旧 IP</th><th>新 IP</th><th>原因</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table>';
+    box.className = 'hist-table-wrap';
+    const tb = box.querySelector('table.hist tbody');
+    if (tb && hadTable) {
+      tb.innerHTML = body;
+    } else {
+      box.innerHTML = html;
+    }
   }
 
   async function loadInstances() {
@@ -806,7 +828,7 @@
       await loadHealth();
       await loadConfig();
       await loadRoutes();
-      await loadIPHistory();
+      await loadIPHistory({ loading: false });
     } catch (e) {
       $('list').innerHTML = '<div class="empty">连接失败：' + e.message +
         '<br><small>请确认控制面地址与令牌正确</small></div>';

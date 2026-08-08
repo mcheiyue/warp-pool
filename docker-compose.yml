@@ -1,13 +1,20 @@
+# warp-pool production compose
+# Dual network:
+#   - default: compose bridge (host port publish 19080/19090/19100+)
+#   - cpa_default: shared with chen-fork/cpa → DNS name warp-pool:1080
+#
+# VPS:
+#   mkdir -p /opt/warp-pool && cp docker-compose.yml .env /opt/warp-pool/
+#   # ensure volume exists (once): docker volume create warp-pool-data
+#   cd /opt/warp-pool && docker compose pull && docker compose up -d
+#
+# Update later: docker compose pull && docker compose up -d
+
 services:
   warp-pool:
     image: ${WARP_POOL_IMAGE:-ghcr.io/mcheiyue/warp-pool:latest}
-    build: .
     container_name: warp-pool
     restart: unless-stopped
-    # v0.3: Warp+netns needs privileged-class (ip netns mount + tun)
-    # ponytail: privileged is the shortest path that matches G0; tighten later if needed
-    # Try caps-only: docker compose -f docker-compose.yml -f docker-compose.caps.yml up -d
-    # (cap_add NET_ADMIN SYS_ADMIN + tun + sysctls; no privileged). Fallback: this file.
     privileged: true
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -22,8 +29,8 @@ services:
       ENABLE_EXPOSE: "${ENABLE_EXPOSE:-1}"
       AGG_SOCKS_PORT: "${AGG_SOCKS_PORT:-1080}"
       CONTROL_PORT: "${CONTROL_PORT:-9090}"
-      CONTROL_BIND: "${CONTROL_BIND:-127.0.0.1}"
-      CONTROL_TOKEN: "${CONTROL_TOKEN:-}"
+      CONTROL_BIND: "${CONTROL_BIND:-0.0.0.0}"
+      CONTROL_TOKEN: "${CONTROL_TOKEN:?set CONTROL_TOKEN in .env}"
       HEALTH_INTERVAL: "${HEALTH_INTERVAL:-60}"
       HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-15}"
       HEALTH_FAILURES: "${HEALTH_FAILURES:-3}"
@@ -44,11 +51,22 @@ services:
     volumes:
       - warp-pool-data:/data
     ports:
-      - "127.0.0.1:1080:1080"
-      - "127.0.0.1:11000-11009:11000-11009"
-      # control stays loopback inside; publish only with token, e.g.:
-      # - "127.0.0.1:9090:9090"
-    mem_limit: 512m
+      - "127.0.0.1:${HOST_AGG_PORT:-19080}:1080"
+      - "127.0.0.1:${HOST_CONTROL_PORT:-19090}:9090"
+      - "127.0.0.1:${HOST_EXPOSE_BASE:-19100}-19102:11000-11002"
+    networks:
+      - default
+      - cpa_default
+    mem_limit: ${MEM_LIMIT:-512m}
 
 volumes:
   warp-pool-data:
+    name: warp-pool-data
+    external: true
+
+networks:
+  default:
+    driver: bridge
+  cpa_default:
+    name: cpa_default
+    external: true
