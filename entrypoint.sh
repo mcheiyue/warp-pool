@@ -71,19 +71,89 @@ fi
 
 PIDS=()
 
+# desired_n.json + instances/* are source of truth; WARP_INSTANCES is seed only.
+_desired_from_file() {
+  local f="${DATA_DIR}/state/desired_n.json" n=""
+  if [ -f "$f" ]; then
+    n="$(jq -r '.desired // .n // empty' "$f" 2>/dev/null || true)"
+  fi
+  if [ -n "$n" ] && [ "$n" -ge 1 ] 2>/dev/null; then
+    echo "$n"
+  fi
+}
+
+_write_desired_n() {
+  local n="$1"
+  mkdir -p "${DATA_DIR}/state"
+  printf '%s\n' "{\"desired\":${n},\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+    >"${DATA_DIR}/state/desired_n.json"
+}
+
+# supervisor: file or env seed
+_read_desired_n() {
+  local n
+  n="$(_desired_from_file)"
+  if [ -n "$n" ]; then
+    echo "$n"
+  else
+    echo "${WARP_INSTANCES}"
+  fi
+}
+
+_count_instance_dirs() {
+  local n=0 d
+  for d in "${DATA_DIR}/instances"/*; do
+    [ -d "$d" ] || continue
+    [[ "$(basename "$d")" =~ ^[0-9]+$ ]] || continue
+    n=$((n + 1))
+  done
+  echo "$n"
+}
+
+_max_instance_id() {
+  local max=-1 id
+  for d in "${DATA_DIR}/instances"/*; do
+    [ -d "$d" ] || continue
+    id="$(basename "$d")"
+    [[ "$id" =~ ^[0-9]+$ ]] || continue
+    if [ "$id" -gt "$max" ]; then max="$id"; fi
+  done
+  echo "$max"
+}
+
+_next_free_id() {
+  local id=0
+  while [ -d "${DATA_DIR}/instances/${id}" ]; do
+    id=$((id + 1))
+  done
+  echo "$id"
+}
+
+_remove_instance() {
+  local rid="$1"
+  if [ -x "${SCRIPTS_DIR}/remove-instance.sh" ]; then
+    bash "${SCRIPTS_DIR}/remove-instance.sh" "$rid" 2>/dev/null || true
+  else
+    SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/stop-instance.sh" "$rid" drop-netns 2>/dev/null || true
+    rm -rf "${DATA_DIR}/instances/${rid}"
+  fi
+}
+
 cleanup() {
   log "shutting down..."
-  if [ "$DEREGISTER_ON_SHUTDOWN" = "1" ]; then
-    for ((id = 0; id < WARP_INSTANCES; id++)); do
+  while read -r id; do
+    [ -n "$id" ] || continue
+    if [ "$DEREGISTER_ON_SHUTDOWN" = "1" ]; then
       wcli "$id" registration delete 2>/dev/null || true
-    done
-  fi
+    fi
+  done < <(list_instance_ids)
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" 2>/dev/null || true
   done
-  for ((id = 0; id < WARP_INSTANCES; id++)); do
+  while read -r id; do
+    [ -n "$id" ] || continue
     bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" drop-netns 2>/dev/null || true
-  done
+  done < <(list_instance_ids)
   for pid in "${PIDS[@]:-}"; do
     wait "$pid" 2>/dev/null || true
   done
@@ -91,9 +161,53 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# --- boot: align to desired_n + disk dirs (hot-add survives rebuild) ---
+BOOT_IDS=()
+disk_n="$(_count_instance_dirs)"
+desired_file="$(_desired_from_file)"
+
+if [ "$disk_n" -gt 0 ]; then
+  # shrink if desired < dirs (same semantics as supervisor)
+  if [ -n "$desired_file" ] && [ "$disk_n" -gt "$desired_file" ]; then
+    log "boot: shrink dirs=${disk_n} → desired=${desired_file}"
+    while [ "$(_count_instance_dirs)" -gt "$desired_file" ]; do
+      hid="$(_max_instance_id)"
+      [ "$hid" -ge 0 ] 2>/dev/null || break
+      log "boot-shrink remove instance ${hid}"
+      _remove_instance "$hid"
+    done
+  fi
+  while read -r id; do
+    [ -n "$id" ] || continue
+    BOOT_IDS+=("$id")
+  done < <(list_instance_ids)
+  if [ -z "$desired_file" ]; then
+    _write_desired_n "$(_count_instance_dirs)"
+    log "boot: wrote desired_n=$(_count_instance_dirs) from existing dirs"
+  fi
+else
+  # fresh volume: seed from WARP_INSTANCES
+  local_i=0
+  for ((local_i = 0; local_i < WARP_INSTANCES; local_i++)); do
+    BOOT_IDS+=("$local_i")
+  done
+  if [ -z "$desired_file" ]; then
+    _write_desired_n "$WARP_INSTANCES"
+    log "boot: wrote desired_n=${WARP_INSTANCES} from WARP_INSTANCES seed"
+  fi
+fi
+
+# desired > dirs: do NOT boot-add here — supervisor hot-adds after control is up
+if [ -n "$desired_file" ] && [ "$desired_file" -gt "${#BOOT_IDS[@]}" ]; then
+  log "boot: start ${#BOOT_IDS[@]} dir(s); supervisor will hot-add to desired=${desired_file}"
+else
+  log "boot: starting ${#BOOT_IDS[@]} instance(s): ${BOOT_IDS[*]:-none}"
+fi
+
 started=0
-for ((id = 0; id < WARP_INSTANCES; id++)); do
-  if [ "$id" -gt 0 ]; then
+boot_idx=0
+for id in "${BOOT_IDS[@]}"; do
+  if [ "$boot_idx" -gt 0 ]; then
     jitter=0
     if [ "${REGISTER_JITTER_MAX}" -gt 0 ] 2>/dev/null; then
       jitter=$((RANDOM % (REGISTER_JITTER_MAX + 1)))
@@ -102,6 +216,7 @@ for ((id = 0; id < WARP_INSTANCES; id++)); do
     log "instance ${id}: stagger sleep ${delay}s"
     sleep "$delay"
   fi
+  boot_idx=$((boot_idx + 1))
 
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
     ready=0
@@ -142,8 +257,9 @@ if [ "$started" -lt 1 ]; then
   exit 1
 fi
 
-log "started ${started}/${WARP_INSTANCES} instances"
-bash "${SCRIPTS_DIR}/health-once.sh" || true
+log "started ${started}/${#BOOT_IDS[@]} boot instance(s) (desired=$(_read_desired_n))"
+# Do not start dead leftover dirs during boot — supervisor restarts after control is up
+SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
 if [ "$ENABLE_HEALTH" = "1" ]; then
   bash "${SCRIPTS_DIR}/health-loop.sh" >/tmp/health-loop.log 2>&1 &
@@ -170,49 +286,6 @@ if [ "$ENABLE_CONTROL" = "1" ]; then
   log "control+ui pid=$! on ${CONTROL_BIND}:${CONTROL_PORT} web=${WEB_ROOT}"
 fi
 
-# hot desired N from control API (POST /instances → state/desired_n.json)
-_read_desired_n() {
-  local f="${DATA_DIR}/state/desired_n.json" n=""
-  if [ -f "$f" ]; then
-    n="$(jq -r '.desired // .n // empty' "$f" 2>/dev/null || true)"
-  fi
-  if [ -n "$n" ] && [ "$n" -ge 1 ] 2>/dev/null; then
-    echo "$n"
-  else
-    echo "${WARP_INSTANCES}"
-  fi
-}
-
-# instance dirs under /data/instances/<id> are source of truth (DELETE removes dir)
-_count_instance_dirs() {
-  local n=0 d
-  for d in "${DATA_DIR}/instances"/*; do
-    [ -d "$d" ] || continue
-    [[ "$(basename "$d")" =~ ^[0-9]+$ ]] || continue
-    n=$((n + 1))
-  done
-  echo "$n"
-}
-
-_max_instance_id() {
-  local max=-1 id
-  for d in "${DATA_DIR}/instances"/*; do
-    [ -d "$d" ] || continue
-    id="$(basename "$d")"
-    [[ "$id" =~ ^[0-9]+$ ]] || continue
-    if [ "$id" -gt "$max" ]; then max="$id"; fi
-  done
-  echo "$max"
-}
-
-_next_free_id() {
-  local id=0
-  while [ -d "${DATA_DIR}/instances/${id}" ]; do
-    id=$((id + 1))
-  done
-  echo "$id"
-}
-
 log "supervising..."
 while true; do
   desired="$(_read_desired_n)"
@@ -224,12 +297,7 @@ while true; do
     rm -f "${DATA_DIR}/state/remove-id"
     if [ -n "$rid" ] && [ "$rid" -ge 0 ] 2>/dev/null; then
       log "hot-remove instance ${rid}"
-      if [ -x "${SCRIPTS_DIR}/remove-instance.sh" ]; then
-        bash "${SCRIPTS_DIR}/remove-instance.sh" "$rid" 2>/dev/null || true
-      else
-        SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/stop-instance.sh" "$rid" drop-netns 2>/dev/null || true
-        rm -rf "${DATA_DIR}/instances/${rid}"
-      fi
+      _remove_instance "$rid"
       cur="$(_count_instance_dirs)"
       SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
     fi
@@ -241,12 +309,7 @@ while true; do
       hid="$(_max_instance_id)"
       [ "$hid" -ge 0 ] 2>/dev/null || break
       log "hot-shrink remove instance ${hid} (desired=${desired})"
-      if [ -x "${SCRIPTS_DIR}/remove-instance.sh" ]; then
-        bash "${SCRIPTS_DIR}/remove-instance.sh" "$hid" 2>/dev/null || true
-      else
-        SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/stop-instance.sh" "$hid" drop-netns 2>/dev/null || true
-        rm -rf "${DATA_DIR}/instances/${hid}"
-      fi
+      _remove_instance "$hid"
     done
     cur="$(_count_instance_dirs)"
   fi
@@ -276,7 +339,7 @@ while true; do
   else
     WARP_INSTANCES=0
   fi
-  # health-once loops 0..N-1; keep N at least desired for empty holes skip
+  # keep env in sync for logs/compat only; health-once discovers ids from disk
   if [ "$desired" -gt "$WARP_INSTANCES" ] 2>/dev/null; then
     WARP_INSTANCES="$desired"
   fi

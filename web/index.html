@@ -29,7 +29,7 @@
       background: var(--bg);
       color: var(--text); min-height: 100dvh; line-height: 1.45; font-size: 14px;
     }
-    .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
     header {
       display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
       margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--line);
@@ -88,53 +88,75 @@
     .hint { font-size: .78rem; color: var(--muted); margin-top: 6px; }
     .token-mask { font-family: var(--mono); color: var(--muted); font-size: .85rem; }
 
-    /* instance cards: actions always exposed (row, wrap) — ui-ux-pro-max card pattern */
+    /* 1 instance per row — never cram 3 narrow cards */
     #list {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px;
+      display: flex; flex-direction: column; gap: 8px;
     }
-    #list .empty { grid-column: 1 / -1; }
     .card {
       background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r);
-      padding: 12px 14px; margin-bottom: 0;
-      display: flex; flex-direction: column; gap: 10px;
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px 16px; align-items: center;
     }
-    .card.out { opacity: .72; border-style: dashed; }
-    .card-top {
-      display: flex; align-items: flex-start; gap: 10px;
+    .card.out { opacity: .78; border-style: dashed; }
+    .card-id {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      min-width: 44px;
     }
-    .tag {
-      display: inline-block; font-size: .7rem; padding: 1px 8px; border-radius: 999px;
-      border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: middle;
-    }
-    .tag.in { color: #bbf7d0; border-color: color-mix(in srgb, var(--green) 40%, var(--line)); background: color-mix(in srgb, var(--green) 12%, transparent); }
-    .tag.out { color: var(--muted); }
-    .tag.sticky { color: #fde68a; border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); background: color-mix(in srgb, var(--amber) 12%, transparent); }
-    .pool-line { font-size: .85rem; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
-    .pool-line b { color: var(--text); font-weight: 600; }
     .card .id {
-      width: 32px; height: 32px; border-radius: 8px; background: var(--bg);
+      width: 36px; height: 36px; border-radius: 8px; background: var(--bg);
       display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted);
-      flex-shrink: 0; font-family: var(--mono); font-size: .85rem;
+      font-family: var(--mono); font-size: .9rem;
     }
     .health {
-      display: flex; flex-direction: column; align-items: center; gap: 4px;
-      flex-shrink: 0; min-width: 36px; margin-top: 2px;
+      display: inline-flex; align-items: center; gap: 4px;
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .dot.on { background: var(--green); box-shadow: 0 0 8px color-mix(in srgb, var(--green) 50%, transparent); }
     .dot.off { background: var(--red); }
-    .health-txt { font-size: .65rem; color: var(--muted); line-height: 1; }
+    .health-txt { font-size: .68rem; color: var(--muted); line-height: 1; }
     .health-txt.ok { color: var(--green); }
     .health-txt.bad { color: var(--red); }
-    .info { flex: 1; min-width: 0; }
-    .v4 { font-size: 1.05rem; font-weight: 650; color: var(--green); font-variant-numeric: tabular-nums; font-family: var(--mono); }
-    .v6 { font-size: .78rem; color: var(--blue); margin-top: 2px; word-break: break-all; font-family: var(--mono); }
-    .meta { font-size: .75rem; color: var(--muted); margin-top: 6px; line-height: 1.45; }
+    .info { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+    .info-head {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    }
+    .v4 {
+      font-size: 1.1rem; font-weight: 650; color: var(--green);
+      font-variant-numeric: tabular-nums; font-family: var(--mono);
+    }
+    .v6 { font-size: .78rem; color: var(--blue); word-break: break-all; font-family: var(--mono); }
+    .tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+    .tag {
+      display: inline-block; font-size: .7rem; padding: 1px 8px; border-radius: 999px;
+      border: 1px solid var(--line); color: var(--muted);
+    }
+    .tag.in { color: #bbf7d0; border-color: color-mix(in srgb, var(--green) 40%, var(--line)); background: color-mix(in srgb, var(--green) 12%, transparent); }
+    .tag.out { color: var(--muted); }
+    .tag.sticky { color: #fde68a; border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+    .kv {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 2px 14px; font-size: .75rem; color: var(--muted);
+    }
+    .kv b { color: var(--text); font-weight: 500; font-family: var(--mono); font-size: .74rem; }
     .actions {
-      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-      padding-top: 8px; border-top: 1px solid var(--line);
+      display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; justify-content: flex-end;
+    }
+    .actions .btn-sm { white-space: nowrap; flex-shrink: 0; }
+    @media (max-width: 860px) {
+      .card {
+        grid-template-columns: auto 1fr;
+      }
+      .actions {
+        grid-column: 1 / -1;
+        flex-wrap: wrap; justify-content: flex-start;
+        padding-top: 8px; border-top: 1px solid var(--line);
+      }
     }
     .empty { text-align: center; padding: 28px 16px; color: var(--muted); }
+    .pool-line { font-size: .85rem; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
+    .pool-line b { color: var(--text); font-weight: 600; }
 
     /* A: pool sticky strip (impeccable) */
     .pool-strip {
@@ -279,15 +301,17 @@
       </div>
 
       <div class="panel">
-        <h2>IP 历史 <span class="sub">换 IP 记录</span></h2>
+        <h2>IP 历史 <span class="sub">按时间倒序 · 全池合并</span></h2>
         <div class="row" style="margin-bottom:8px">
-          <label for="hist-id" class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
-            实例 id
-            <input id="hist-id" type="number" min="0" value="0" style="width:72px;padding:6px 8px;max-width:none">
+          <label for="hist-filter" class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
+            筛选实例
+            <select id="hist-filter" style="width:120px;padding:6px 8px;max-width:none">
+              <option value="">全部</option>
+            </select>
           </label>
-          <button type="button" class="btn btn-sm" id="btn-hist-load">加载</button>
+          <button type="button" class="btn btn-sm" id="btn-hist-load">刷新</button>
         </div>
-        <div id="hist-box" class="empty" aria-label="IP 历史">选择实例后加载</div>
+        <div id="hist-box" class="empty" aria-label="IP 历史">加载中…</div>
       </div>
 
       <div class="panel">
@@ -591,14 +615,29 @@
     return true;
   }
 
+  let lastInstanceIds = [];
+
+  function syncHistFilter(ids) {
+    const sel = $('hist-filter');
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">全部</option>' +
+      ids.map((id) => '<option value="' + id + '">id=' + id + '</option>').join('');
+    if (cur !== '' && ids.map(String).indexOf(String(cur)) >= 0) sel.value = cur;
+    else sel.value = '';
+  }
+
   function renderList(instances) {
     const list = $('list');
     if (!instances.length) {
       list.innerHTML = '<div class="empty">暂无实例（启动中或尚未写入状态）</div>';
       $('list-sub').textContent = '0 个';
+      lastInstanceIds = [];
       return;
     }
     instances.sort((a, b) => (a.id | 0) - (b.id | 0));
+    lastInstanceIds = instances.map((x) => x.id | 0);
+    syncHistFilter(lastInstanceIds);
     let ok = 0;
     list.innerHTML = '';
     instances.forEach((inst) => {
@@ -608,36 +647,39 @@
       const cd = cooldownLeft(inst.last_rotate);
       const card = document.createElement('div');
       card.className = 'card' + (pooled ? '' : ' out');
-      const uniq = inst.unique === false ? ' · IPv4 冲突' : '';
-      const lr = inst.last_rotate ? ' · 上次换 IP ' + fmtLocal(inst.last_rotate) : '';
-      const upd = inst.updated ? ' · 更新 ' + fmtLocal(inst.updated) : '';
-      const tags =
-        '<span class="tag ' + (pooled ? 'in' : 'out') + '">' + (pooled ? '入池' : '出池') + '</span>' +
-        (isSticky ? '<span class="tag sticky">粘性</span>' : '');
       const hLabel = inst.healthy ? '健康' : '异常';
+      const tags =
+        '<span class="tags">' +
+          '<span class="tag ' + (pooled ? 'in' : 'out') + '">' + (pooled ? '入池' : '出池') + '</span>' +
+          (isSticky ? '<span class="tag sticky">粘性</span>' : '') +
+          (inst.unique === false ? '<span class="tag">IPv4 冲突</span>' : '') +
+        '</span>';
       card.innerHTML =
-        '<div class="card-top">' +
+        '<div class="card-id">' +
           '<div class="id">' + inst.id + '</div>' +
           '<div class="health" role="status" aria-label="实例 ' + inst.id + ' ' + hLabel + '">' +
             '<span class="dot ' + (inst.healthy ? 'on' : 'off') + '" aria-hidden="true"></span>' +
             '<span class="health-txt ' + (inst.healthy ? 'ok' : 'bad') + '">' + hLabel + '</span>' +
           '</div>' +
-          '<div class="info">' +
-            '<div class="v4">' + (inst.v4 || inst.ip || '—') + tags + '</div>' +
-            (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
-            '<div class="meta">直连 :' + (inst.expose ?? '?') +
-              ' · ' + (inst.mode || 'warp') +
-              (inst.netns ? ' · ' + inst.netns : '') +
-              uniq + lr + upd + (cd ? ' · ' + cd : '') +
-            '</div>' +
+        '</div>' +
+        '<div class="info">' +
+          '<div class="info-head">' +
+            '<span class="v4">' + (inst.v4 || inst.ip || '—') + '</span>' + tags +
+          '</div>' +
+          (inst.v6 ? '<div class="v6">' + inst.v6 + '</div>' : '') +
+          '<div class="kv">' +
+            '<span>直连 <b>:' + (inst.expose ?? '?') + '</b></span>' +
+            '<span>模式 <b>' + (inst.mode || 'warp') + (inst.netns ? ' · ' + inst.netns : '') + '</b></span>' +
+            '<span>更新 <b>' + (inst.updated ? fmtLocal(inst.updated) : '—') + '</b></span>' +
+            '<span>换 IP <b>' + (inst.last_rotate ? fmtLocal(inst.last_rotate) : '—') +
+              (cd ? ' · ' + cd : '') + '</b></span>' +
           '</div>' +
         '</div>' +
         '<div class="actions">' +
           '<button type="button" class="btn btn-sm" data-pool="' + inst.id + '" data-pooled="' + (pooled ? '1' : '0') + '">' +
             (pooled ? '出池' : '入池') + '</button>' +
-          '<button type="button" class="btn btn-sm" data-sticky="' + inst.id + '">固定到此</button>' +
+          '<button type="button" class="btn btn-sm" data-sticky="' + inst.id + '">固定</button>' +
           '<button type="button" class="btn btn-sm btn-primary" data-rot="' + inst.id + '">换 IP</button>' +
-          '<button type="button" class="btn btn-sm" data-hist="' + inst.id + '">历史</button>' +
           '<button type="button" class="btn btn-sm btn-danger" data-del="' + inst.id + '">删除</button>' +
         '</div>';
       list.appendChild(card);
@@ -654,14 +696,6 @@
     });
     list.querySelectorAll('[data-sticky]').forEach((btn) => {
       btn.onclick = () => setSticky(+btn.getAttribute('data-sticky'), btn);
-    });
-    list.querySelectorAll('[data-hist]').forEach((btn) => {
-      btn.onclick = () => {
-        const id = +btn.getAttribute('data-hist');
-        const el = $('hist-id');
-        if (el) el.value = id;
-        loadIPHistory(id);
-      };
     });
   }
 
@@ -695,26 +729,48 @@
     return true;
   }
 
-  async function loadIPHistory(id) {
+  async function loadIPHistory() {
     const box = $('hist-box');
     if (!box) return;
-    if (id == null || isNaN(id)) id = parseInt(($('hist-id') && $('hist-id').value) || '0', 10);
+    const filterEl = $('hist-filter');
+    const filter = filterEl ? filterEl.value : '';
+    let ids = lastInstanceIds.slice();
+    if (filter !== '') {
+      const one = parseInt(filter, 10);
+      ids = isNaN(one) ? [] : [one];
+    }
+    if (!ids.length) {
+      box.className = 'empty';
+      box.textContent = '暂无实例可查';
+      return;
+    }
     box.className = 'empty';
-    box.textContent = '加载 id=' + id + ' …';
-    const { res, data } = await api('/ip-history?id=' + id + '&limit=50');
-    if (!res.ok || !data) {
-      box.textContent = '加载失败';
+    box.textContent = '加载中…';
+    const rows = [];
+    await Promise.all(ids.map(async (id) => {
+      const { res, data } = await api('/ip-history?id=' + id + '&limit=50');
+      if (!res.ok || !data) return;
+      (data.entries || []).forEach((e) => {
+        rows.push({
+          id: id,
+          ts: e.ts || '',
+          old: e.old || '',
+          new: e.new || '',
+          reason: e.reason || '',
+        });
+      });
+    }));
+    if (!rows.length) {
+      box.className = 'empty';
+      box.textContent = (filter === '' ? '全池' : 'id=' + filter) + ' 暂无换 IP 历史（下次换 IP 后写入）';
       return;
     }
-    const entries = data.entries || [];
-    if (!entries.length) {
-      box.textContent = 'id=' + id + ' 暂无换 IP 历史（下次换 IP 后写入）';
-      return;
-    }
+    rows.sort((a, b) => Date.parse(b.ts || 0) - Date.parse(a.ts || 0));
     box.className = 'hist-table-wrap';
-    const body = entries.slice().reverse().map((e) => {
+    const body = rows.map((e) => {
       return '<tr>' +
         '<td class="mono">' + fmtLocal(e.ts) + '</td>' +
+        '<td>id=' + e.id + '</td>' +
         '<td class="mono">' + (e.old || '—') + '</td>' +
         '<td class="mono">' + (e.new || '—') + '</td>' +
         '<td>' + (e.reason || '—') + '</td>' +
@@ -722,7 +778,7 @@
     }).join('');
     box.innerHTML =
       '<table class="hist"><thead><tr>' +
-      '<th>时间</th><th>旧 IP</th><th>新 IP</th><th>原因</th>' +
+      '<th>时间</th><th>实例</th><th>旧 IP</th><th>新 IP</th><th>原因</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table>';
   }
 
@@ -750,6 +806,7 @@
       await loadHealth();
       await loadConfig();
       await loadRoutes();
+      await loadIPHistory();
     } catch (e) {
       $('list').innerHTML = '<div class="empty">连接失败：' + e.message +
         '<br><small>请确认控制面地址与令牌正确</small></div>';
@@ -911,10 +968,9 @@
   const btnRoutes = $('btn-routes-refresh');
   if (btnRoutes) btnRoutes.onclick = () => loadRoutes();
   const btnHist = $('btn-hist-load');
-  if (btnHist) btnHist.onclick = () => {
-    const id = parseInt(($('hist-id') && $('hist-id').value) || '0', 10);
-    loadIPHistory(id);
-  };
+  if (btnHist) btnHist.onclick = () => loadIPHistory();
+  const histFilter = $('hist-filter');
+  if (histFilter) histFilter.onchange = () => loadIPHistory();
 
   function startPoll() {
     stopPoll();
