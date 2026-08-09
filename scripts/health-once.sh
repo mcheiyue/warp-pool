@@ -41,6 +41,13 @@ while read -r id; do
   fi
 
   if [ "$alive" -eq 0 ]; then
+    # 出池休眠：不拉起；入池才监督重启
+    if ! is_pool_eligible "$id"; then
+      log "instance ${id}: process dead + not pooled — leave parked"
+      # 不改 pooled/exclude，仅标 unhealthy + 清空运行态
+      write_meta "$id" false "" "$failures" "$last_rotate" "" "" false
+      continue
+    fi
     log "instance ${id}: process dead — marking unhealthy"
     write_meta "$id" false "" "$((failures + 1))" "$last_rotate" "" "" false
     if [ "${SUPERVISE_RESTART:-1}" = "1" ]; then

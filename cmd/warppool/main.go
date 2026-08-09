@@ -928,6 +928,13 @@ func readIPHistory(data string, id, limit int) map[string]any {
 	}
 }
 
+func truncate(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 func appendPoolLog(data, msg string) {
 	dir := filepath.Join(data, "logs")
 	_ = os.MkdirAll(dir, 0o755)
@@ -1073,12 +1080,48 @@ func handlePoolMembership(w http.ResponseWriter, r *http.Request, data, scripts 
 		http.Error(w, "write meta: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// PARK_ON_UNPOOL=1（默认）：出池停 warp-svc 省内存；入池再拉起。目录/netns 保留。
+	parked := false
+	park := strings.TrimSpace(os.Getenv("PARK_ON_UNPOOL"))
+	if park == "" {
+		park = "1"
+	}
+	if park == "1" {
+		if !pooled {
+			stop := exec.Command("/bin/bash", filepath.Join(scripts, "stop-instance.sh"), strconv.Itoa(id))
+			stopOut, stopErr := stop.CombinedOutput()
+			parked = stopErr == nil
+			appendPoolLog(data, fmt.Sprintf("park id=%d stop_err=%v out=%s", id, stopErr, truncate(string(stopOut), 200)))
+			if stopErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				writeJSON(w, map[string]any{
+					"ok": false, "id": id, "pooled": pooled,
+					"error": "park stop failed: " + stopErr.Error(), "output": string(stopOut),
+				})
+				return
+			}
+		} else {
+			start := exec.Command("/bin/bash", filepath.Join(scripts, "start-instance.sh"), strconv.Itoa(id))
+			startOut, startErr := start.CombinedOutput()
+			appendPoolLog(data, fmt.Sprintf("unpark id=%d start_err=%v out=%s", id, startErr, truncate(string(startOut), 200)))
+			if startErr != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				writeJSON(w, map[string]any{
+					"ok": false, "id": id, "pooled": pooled,
+					"error": "unpark start failed: " + startErr.Error(), "output": string(startOut),
+				})
+				return
+			}
+		}
+	}
+
 	// refresh healthy.json without supervising restarts
 	script := filepath.Join(scripts, "health-once.sh")
 	cmd := exec.Command("/bin/bash", script)
 	cmd.Env = append(os.Environ(), "SUPERVISE_RESTART=0")
 	out, err := cmd.CombinedOutput()
-	appendPoolLog(data, fmt.Sprintf("membership id=%d pooled=%v reason=%q health_err=%v", id, pooled, reason, err))
+	appendPoolLog(data, fmt.Sprintf("membership id=%d pooled=%v reason=%q parked=%v health_err=%v", id, pooled, reason, parked, err))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		writeJSON(w, map[string]any{
@@ -1087,7 +1130,7 @@ func handlePoolMembership(w http.ResponseWriter, r *http.Request, data, scripts 
 		})
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "id": id, "pooled": pooled, "exclude_reason": reason})
+	writeJSON(w, map[string]any{"ok": true, "id": id, "pooled": pooled, "exclude_reason": reason, "parked": parked})
 }
 
 func handlePoolSticky(w http.ResponseWriter, r *http.Request, data string) {

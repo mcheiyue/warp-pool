@@ -836,18 +836,39 @@
   }
 
   async function setMembership(id, pooled, btn) {
+    if (pooled) {
+      const ok = await confirmModal(
+        '入池实例 ' + id,
+        '将重新把该实例加入聚合调度（若已休眠会重新启动 warp-svc，约需数十秒）。是否继续？'
+      );
+      if (!ok) return;
+    } else {
+      const ok = await confirmModal(
+        '出池实例 ' + id,
+        '将从聚合口移除该实例。默认会休眠（停止 warp-svc 以省内存），目录保留；再入池可拉起。是否出池？'
+      );
+      if (!ok) return;
+    }
     if (btn) btn.disabled = true;
     try {
       const { res, data } = await api('/pool/membership', { method: 'POST', body: { id: id, pooled: !!pooled } });
-      if (res.ok && (!data || data.ok !== false)) toast('实例 ' + id + (pooled ? ' 已入池' : ' 已出池'));
-      else toast('成员变更失败：' + ((data && data.error) || res.status), true);
+      if (res.ok && (!data || data.ok !== false)) {
+        let msg = '实例 ' + id + (pooled ? ' 已入池' : ' 已出池');
+        if (data && data.parked) msg += '（已休眠）';
+        toast(msg);
+      } else toast('成员变更失败：' + ((data && data.error) || res.status), true);
     } catch (e) {
       toast(e.message, true);
     }
-    setTimeout(refresh, 600);
+    setTimeout(refresh, pooled ? 2500 : 800);
   }
 
   async function setSticky(id, btn) {
+    const ok = await confirmModal(
+      '固定到实例 ' + id,
+      '聚合口流量将优先走 id=' + id + '（失败自动回退轮询）。是否固定？'
+    );
+    if (!ok) return;
     if (btn) btn.disabled = true;
     try {
       const { res, data } = await api('/pool/sticky', { method: 'POST', body: { id: id } });
@@ -860,6 +881,8 @@
   }
 
   async function clearSticky() {
+    const ok = await confirmModal('清除粘性', '取消固定实例，聚合口恢复健康轮询。是否继续？');
+    if (!ok) return;
     try {
       const { res, data } = await api('/pool/sticky', { method: 'DELETE' });
       if (res.ok && (!data || data.ok !== false)) toast('已清除粘性');
@@ -871,6 +894,11 @@
   }
 
   async function changeIp(id, btn) {
+    const ok = await confirmModal(
+      '换 IP · 实例 ' + id,
+      '将重启该实例的 warp-svc 以更换出口 IPv4（冷却期内会失败）。业务可能短暂中断。是否继续？'
+    );
+    if (!ok) return;
     if (btn) { btn.disabled = true; btn.textContent = '切换中…'; }
     try {
       const { res, data } = await api('/rotate?id=' + id + '&mode=restart', { method: 'POST' });
@@ -890,7 +918,10 @@
   }
 
   async function changeIpAll() {
-    const ok = await confirmModal('全部换 IP', '将对池内所有实例依次切换出口 IP，可能需要数分钟。是否继续？');
+    const ok = await confirmModal(
+      '全部换 IP',
+      '将对池内所有实例依次切换出口 IP，可能需要数分钟，期间聚合出口不稳定。是否继续？'
+    );
     if (!ok) return;
     toast('已提交全部换 IP…');
     try {
@@ -904,11 +935,14 @@
   }
 
   async function deleteOne(id) {
-    const ok = await confirmModal('删除实例 ' + id, '将停止该实例并从调度中移除。Docker 预映射端口不会自动释放。是否删除？');
+    const ok = await confirmModal(
+      '删除实例 ' + id,
+      '将永久停止该实例并删除目录/netns，不可恢复。聚合与粘性若指向它会失效。是否删除？'
+    );
     if (!ok) return;
     try {
       const { res, data } = await api('/instances?id=' + id, { method: 'DELETE' });
-      if (res.ok && data && data.ok !== false) toast('实例 ' + id + ' 已停止');
+      if (res.ok && data && data.ok !== false) toast('实例 ' + id + ' 已删除');
       else toast('删除失败：' + ((data && data.error) || res.status), true);
     } catch (e) {
       toast(e.message, true);
@@ -917,6 +951,11 @@
   }
 
   async function addOne() {
+    const ok = await confirmModal(
+      '增加实例',
+      '将热增 1 个 WARP 实例（约 +35–45MiB 内存，注册需数十秒）。是否继续？'
+    );
+    if (!ok) return;
     try {
       const { res, data } = await api('/instances', { method: 'POST' });
       if (res.ok) toast('已请求增加实例（目标 N=' + (data && data.desired) + '）');

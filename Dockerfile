@@ -13,7 +13,6 @@ FROM debian:${DEBIAN_VERSION}
 
 ARG TARGETARCH
 ARG COMMIT_SHA=
-ARG GOST_VERSION=2.11.5
 
 LABEL org.opencontainers.image.title="warp-pool" \
       org.opencontainers.image.description="Warp mode × netns multi-instance WARP pool" \
@@ -31,7 +30,7 @@ RUN set -eux; \
     > /etc/apt/sources.list.d/cloudflare-client.list; \
   apt-get update; \
   apt-get install -y --no-install-recommends cloudflare-warp; \
-  # B3: microsocks preferred (bookworm apt); else compile from rofl0r/microsocks
+  # microsocks only (no gost — saves image size; runtime always microsocks)
   if ! apt-get install -y --no-install-recommends microsocks; then \
     apt-get install -y --no-install-recommends build-essential git make; \
     git clone --depth 1 https://github.com/rofl0r/microsocks /tmp/microsocks; \
@@ -44,25 +43,14 @@ RUN set -eux; \
   apt-get clean; \
   rm -rf /var/lib/apt/lists/*; \
   mkdir -p /opt/warp-pool/web /data/instances /run/warp-pool /root/.local/share/warp; \
-  echo -n yes > /root/.local/share/warp/accepted-tos.txt; \
-  # gost fallback: only on amd64 (release assets lack reliable arm64 for 2.11.5)
-  if [ "${TARGETARCH}" = "amd64" ] || [ -z "${TARGETARCH}" ]; then \
-    curl -fsSL -o /tmp/gost.gz \
-      "https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost-linux-amd64-${GOST_VERSION}.gz"; \
-    gunzip -c /tmp/gost.gz > /usr/local/bin/gost; \
-    chmod +x /usr/local/bin/gost; \
-    rm -f /tmp/gost.gz; \
-  else \
-    echo "skip gost on arch=${TARGETARCH} (use microsocks)"; \
-  fi
+  echo -n yes > /root/.local/share/warp/accepted-tos.txt
 
 COPY --from=warppool-build /warppool /usr/local/bin/warppool
 COPY scripts/ /opt/warp-pool/scripts/
 COPY web/ /opt/warp-pool/web/
 COPY entrypoint.sh /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /opt/warp-pool/scripts/*.sh; \
-    if [ -f /usr/local/bin/gost ]; then chmod +x /usr/local/bin/gost; fi
+RUN chmod +x /entrypoint.sh /usr/local/bin/warppool /opt/warp-pool/scripts/*.sh
 
 USER root
 
@@ -70,7 +58,8 @@ ENV DATA_DIR=/data \
     WARP_INSTANCES=2 \
     INSTANCE_PORT_BASE=40000 \
     EXPOSE_PORT_BASE=11000 \
-    ENABLE_EXPOSE=1 \
+    ENABLE_EXPOSE=0 \
+    PARK_ON_UNPOOL=1 \
     AGG_SOCKS_PORT=1080 \
     CONTROL_PORT=9090 \
     CONTROL_BIND=127.0.0.1 \
@@ -85,10 +74,11 @@ ENV DATA_DIR=/data \
     ENABLE_CONTROL=1 \
     ENABLE_HEALTH=1 \
     HEALTH_AUTO_ROTATE=0 \
+    HEALTH_INTERVAL=90 \
     WEB_ROOT=/opt/warp-pool/web \
     SOCKS_BIN=microsocks
 
 VOLUME ["/data"]
-EXPOSE 1080 11000 11001 9090
+EXPOSE 1080 9090
 
 ENTRYPOINT ["/entrypoint.sh"]

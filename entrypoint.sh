@@ -8,7 +8,8 @@ export PID_DIR="${PID_DIR:-/run/warp-pool}"
 export WARP_INSTANCES="${WARP_INSTANCES:-2}"
 export INSTANCE_PORT_BASE="${INSTANCE_PORT_BASE:-40000}"
 export EXPOSE_PORT_BASE="${EXPOSE_PORT_BASE:-11000}"
-export ENABLE_EXPOSE="${ENABLE_EXPOSE:-1}"
+export ENABLE_EXPOSE="${ENABLE_EXPOSE:-0}"
+export PARK_ON_UNPOOL="${PARK_ON_UNPOOL:-1}"
 export AGG_SOCKS_PORT="${AGG_SOCKS_PORT:-1080}"
 export CONTROL_PORT="${CONTROL_PORT:-9090}"
 export CONTROL_BIND="${CONTROL_BIND:-127.0.0.1}"
@@ -217,6 +218,14 @@ for id in "${BOOT_IDS[@]}"; do
     sleep "$delay"
   fi
   boot_idx=$((boot_idx + 1))
+
+  # 出池休眠：启动时不拉起 unpooled 实例
+  if [ "${PARK_ON_UNPOOL}" = "1" ] && [ -f "$(instance_dir "$id")/meta.json" ]; then
+    if ! is_pool_eligible "$id"; then
+      log "instance ${id}: boot skip (not pooled, PARK_ON_UNPOOL=1)"
+      continue
+    fi
+  fi
 
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
     ready=0
