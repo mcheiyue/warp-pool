@@ -60,8 +60,13 @@ while read -r id; do
     if acquire_unique_lock 10; then
       if v4_conflicts "$id" "$ip"; then
         release_unique_lock
+        failures=$((failures + 1))
         write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
-        log "instance ${id}: v4 collision ${ip} — excluded from healthy.json"
+        log "instance ${id}: v4 collision ${ip} — failures=${failures}"
+        if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
+          log "instance ${id}: v4 collision auto rotate (${ROTATE_MODE:-restart})"
+          bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-restart}" || true
+        fi
       else
         # persist IP change on reconnect/boot (not only explicit rotate)
         if [ -n "$ip" ] && [ -n "$prev_v4" ] && [ "$ip" != "$prev_v4" ]; then

@@ -372,6 +372,11 @@ while true; do
         continue
       fi
     fi
+    # 出池休眠：监督环不复活 unpooled
+    if [ "${PARK_ON_UNPOOL}" = "1" ] && ! is_pool_eligible "$id"; then
+      log "instance ${id}: dead + not pooled — leave parked"
+      continue
+    fi
     log "instance ${id}: dead, restarting"
     bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
     if [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null || true)" 2>/dev/null; then
