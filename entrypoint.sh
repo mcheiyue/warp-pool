@@ -163,6 +163,39 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# 启动辅助函数：health-loop / aggregate / control
+# 这些函数在 boot 实例循环之前调用，控制面先于实例启动，防止实例探测卡住时整容器离线
+_launch_control() {
+  if [ "$ENABLE_CONTROL" = "1" ]; then
+    warppool control \
+      --listen "${CONTROL_BIND}:${CONTROL_PORT}" \
+      --data "${DATA_DIR}" \
+      --scripts "${SCRIPTS_DIR}" \
+      --token "${CONTROL_TOKEN}" \
+      --web "${WEB_ROOT}" \
+      >/tmp/control.log 2>&1 &
+    PIDS+=($!)
+    log "control+ui pid=$! on ${CONTROL_BIND}:${CONTROL_PORT} web=${WEB_ROOT}"
+  fi
+}
+
+_launch_aggregate() {
+  if [ "$ENABLE_AGGREGATE" = "1" ]; then
+    warppool aggregate --listen "0.0.0.0:${AGG_SOCKS_PORT}" --healthy "${DATA_DIR}/state/healthy.json" \
+      >/tmp/aggregate.log 2>&1 &
+    PIDS+=($!)
+    log "aggregate pid=$! on :${AGG_SOCKS_PORT}"
+  fi
+}
+
+_launch_health_loop() {
+  if [ "$ENABLE_HEALTH" = "1" ]; then
+    bash "${SCRIPTS_DIR}/health-loop.sh" >/tmp/health-loop.log 2>&1 &
+    PIDS+=($!)
+    log "health-loop pid=$!"
+  fi
+}
+
 # --- boot: align to desired_n + disk dirs (hot-add survives rebuild) ---
 BOOT_IDS=()
 disk_n="$(_count_instance_dirs)"
@@ -205,6 +238,11 @@ if [ -n "$desired_file" ] && [ "$desired_file" -gt "${#BOOT_IDS[@]}" ]; then
 else
   log "boot: starting ${#BOOT_IDS[@]} instance(s): ${BOOT_IDS[*]:-none}"
 fi
+
+# 先启动控制面，再 boot 实例（即使实例 boot/探测卡住，控制面与 UI 也保持在线）
+_launch_control
+_launch_health_loop
+_launch_aggregate
 
 started=0
 boot_idx=0
@@ -271,30 +309,7 @@ log "started ${started}/${#BOOT_IDS[@]} boot instance(s) (desired=$(_read_desire
 # Do not start dead leftover dirs during boot — supervisor restarts after control is up
 SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
-if [ "$ENABLE_HEALTH" = "1" ]; then
-  bash "${SCRIPTS_DIR}/health-loop.sh" >/tmp/health-loop.log 2>&1 &
-  PIDS+=($!)
-  log "health-loop pid=$!"
-fi
 
-if [ "$ENABLE_AGGREGATE" = "1" ] && [ "$started" -ge 1 ]; then
-  warppool aggregate --listen "0.0.0.0:${AGG_SOCKS_PORT}" --healthy "${DATA_DIR}/state/healthy.json" \
-    >/tmp/aggregate.log 2>&1 &
-  PIDS+=($!)
-  log "aggregate pid=$! on :${AGG_SOCKS_PORT}"
-fi
-
-if [ "$ENABLE_CONTROL" = "1" ]; then
-  warppool control \
-    --listen "${CONTROL_BIND}:${CONTROL_PORT}" \
-    --data "${DATA_DIR}" \
-    --scripts "${SCRIPTS_DIR}" \
-    --token "${CONTROL_TOKEN}" \
-    --web "${WEB_ROOT}" \
-    >/tmp/control.log 2>&1 &
-  PIDS+=($!)
-  log "control+ui pid=$! on ${CONTROL_BIND}:${CONTROL_PORT} web=${WEB_ROOT}"
-fi
 
 log "supervising..."
 while true; do
