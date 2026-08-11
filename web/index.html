@@ -650,12 +650,13 @@
       const cd = cooldownLeft(inst.last_rotate);
       const card = document.createElement('div');
       card.className = 'card' + (pooled ? '' : ' out');
-      const hLabel = inst.healthy ? '健康' : '异常';
+      // 出池休眠是正常状态，非故障：显示「休眠」而非「异常」；无 v4 不报 IPv4 冲突
+      const hLabel = !pooled ? '休眠' : (inst.healthy ? '健康' : '异常');
       const tags =
         '<span class="tags">' +
           '<span class="tag ' + (pooled ? 'in' : 'out') + '">' + (pooled ? '入池' : '出池') + '</span>' +
           (isSticky ? '<span class="tag sticky">粘性</span>' : '') +
-          (inst.unique === false ? '<span class="tag">IPv4 冲突</span>' : '') +
+          (pooled && inst.unique === false ? '<span class="tag">IPv4 冲突</span>' : '') +
         '</span>';
       card.innerHTML =
         '<div class="card-id">' +
