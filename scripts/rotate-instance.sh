@@ -95,7 +95,19 @@ rotate_one() {
   local lock="${PID_DIR}/rotate-${id}.lock"
   local prev_pooled
   mkdir -p "${PID_DIR}"
+  # 兜底：残留 rotate 锁（ts 超过 LOCK_STALE_SEC）自动清理
+  if [ -f "$lock" ] && [ "${LOCK_STALE_SEC}" -gt 0 ] 2>/dev/null; then
+    local now lock_ts
+    now="$(date +%s 2>/dev/null || echo 0)"
+    lock_ts="$(cat "${lock}.ts" 2>/dev/null || echo 0)"
+    if [ "$now" -gt 0 ] && [ "$lock_ts" -gt 0 ] && \
+       [ "$((now - lock_ts))" -ge "${LOCK_STALE_SEC}" ]; then
+      err "rotate lock stale (${lock_ts} ts, ${now} now) — cleaning"
+      rm -f "$lock" "${lock}.ts" 2>/dev/null || true
+    fi
+  fi
   echo $$ > "$lock"
+  date +%s > "${lock}.ts" 2>/dev/null || true
 
   # capture old IP BEFORE drain clears meta.v4
   local old_ip
@@ -104,7 +116,7 @@ rotate_one() {
   # temporary unpool (drain) so rotate leaves healthy.json backends mid-work
   prev_pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
   # shellcheck disable=SC2064
-  trap "rm -f '$lock'; release_unique_lock 2>/dev/null || true; _restore_rotate_drain '$id' '$prev_pooled'" RETURN
+  trap "rm -f '$lock' '${lock}.ts'; release_unique_lock 2>/dev/null || true; _restore_rotate_drain '$id' '$prev_pooled'" RETURN
 
   export SUPERVISE_RESTART=0
 

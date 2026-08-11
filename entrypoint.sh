@@ -26,6 +26,7 @@ export ROTATE_MODE="${ROTATE_MODE:-restart}"
 export BOOT_HEALTH_WAIT="${BOOT_HEALTH_WAIT:-120}"
 export WARP_CONNECT_TIMEOUT="${WARP_CONNECT_TIMEOUT:-45}"
 export WEB_ROOT="${WEB_ROOT:-/opt/warp-pool/web}"
+export LOCK_STALE_SEC="${LOCK_STALE_SEC:-300}"
 
 # shellcheck source=/dev/null
 source "${SCRIPTS_DIR}/lib.sh"

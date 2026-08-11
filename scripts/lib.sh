@@ -295,11 +295,24 @@ v4_conflicts() {
   return 1
 }
 
+LOCK_STALE_SEC="${LOCK_STALE_SEC:-300}"
+
 acquire_unique_lock() {
   local lock="${PID_DIR}/v4-unique.lock"
   local timeout="${1:-$V4_UNIQUE_LOCK_TIMEOUT}"
   local elapsed=0
   mkdir -p "${PID_DIR}"
+  # 兜底：检查是否残留锁（ts 超过 LOCK_STALE_SEC 自动清理）
+  if [ -d "$lock" ] && [ "${LOCK_STALE_SEC}" -gt 0 ] 2>/dev/null; then
+    local lock_ts=0 now
+    now="$(date +%s 2>/dev/null || echo 0)"
+    lock_ts="$(cat "${lock}/ts" 2>/dev/null || echo 0)"
+    if [ "$now" -gt 0 ] && [ "$lock_ts" -gt 0 ] && \
+       [ "$((now - lock_ts))" -ge "${LOCK_STALE_SEC}" ]; then
+      err "v4 unique lock stale (${lock_ts} ts, ${now} now) — cleaning"
+      rm -rf "$lock"
+    fi
+  fi
   while ! mkdir "$lock" 2>/dev/null; do
     sleep 1
     elapsed=$((elapsed + 1))
@@ -307,8 +320,19 @@ acquire_unique_lock() {
       err "v4 unique lock timeout (${timeout}s)"
       return 1
     fi
+    # 等待期间也检查锁是否变 stale（防止死锁期间另一进程挂掉）
+    if [ -d "$lock" ] && [ "${LOCK_STALE_SEC}" -gt 0 ] 2>/dev/null; then
+      local wait_ts=0
+      wait_ts="$(cat "${lock}/ts" 2>/dev/null || echo 0)"
+      if [ "$now" -gt 0 ] && [ "$wait_ts" -gt 0 ] && \
+         [ "$((now - wait_ts))" -ge "${LOCK_STALE_SEC}" ]; then
+        err "v4 unique lock stale during wait (${wait_ts}) — cleaning"
+        rm -rf "$lock"
+      fi
+    fi
   done
   echo $$ > "${lock}/pid" 2>/dev/null || true
+  date +%s > "${lock}/ts" 2>/dev/null || true
   return 0
 }
 

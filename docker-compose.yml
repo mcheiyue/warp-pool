@@ -49,6 +49,7 @@ services:
       ENABLE_HEALTH: "${ENABLE_HEALTH:-1}"
       HEALTH_AUTO_ROTATE: "${HEALTH_AUTO_ROTATE:-0}"
       WEB_ROOT: "${WEB_ROOT:-/opt/warp-pool/web}"
+      LOCK_STALE_SEC: "${LOCK_STALE_SEC:-300}"
     volumes:
       - warp-pool-data:/data
     ports:

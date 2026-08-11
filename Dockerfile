@@ -75,6 +75,7 @@ ENV DATA_DIR=/data \
     ENABLE_HEALTH=1 \
     HEALTH_AUTO_ROTATE=0 \
     HEALTH_INTERVAL=90 \
+    LOCK_STALE_SEC=300 \
     WEB_ROOT=/opt/warp-pool/web \
     SOCKS_BIN=microsocks
 
