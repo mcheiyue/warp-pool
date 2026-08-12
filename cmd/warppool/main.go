@@ -1130,6 +1130,15 @@ func handlePoolMembership(w http.ResponseWriter, r *http.Request, data, scripts 
 		})
 		return
 	}
+
+	// 出池时若 sticky 目标仍是该 id，立即清除 sticky，让聚合立刻回退 RR
+	if !pooled {
+		stPath := stickyPath(data)
+		if st, serr := loadSticky(stPath); serr == nil && st != nil && st.ID == id {
+			_ = os.Remove(stPath)
+			appendPoolLog(data, fmt.Sprintf("membership id=%d unpooled — sticky cleared", id))
+		}
+	}
 	writeJSON(w, map[string]any{"ok": true, "id": id, "pooled": pooled, "exclude_reason": reason, "parked": parked})
 }
 
