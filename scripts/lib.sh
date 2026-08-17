@@ -209,12 +209,54 @@ write_meta() {
   mv "${meta}.tmp" "$meta"
 }
 
+# Clear rotate lock if older than LOCK_STALE_SEC. No-op if fresh or missing.
+clear_stale_rotate_lock() {
+  local id="$1"
+  local lock="${PID_DIR}/rotate-${id}.lock"
+  local now=0 lock_ts=0
+  [ -f "$lock" ] || return 0
+  if [ "${LOCK_STALE_SEC}" -gt 0 ] 2>/dev/null; then
+    now="$(date +%s 2>/dev/null || echo 0)"
+    lock_ts="$(cat "${lock}.ts" 2>/dev/null || echo 0)"
+    if [ "$now" -gt 0 ] && [ "$lock_ts" -gt 0 ] && \
+       [ "$((now - lock_ts))" -ge "${LOCK_STALE_SEC}" ]; then
+      err "rotate lock stale id=${id} (age=$((now - lock_ts))s) — cleaning"
+      rm -f "$lock" "${lock}.ts" 2>/dev/null || true
+    fi
+  fi
+}
+
+# return 0 = fresh rotate lock present (skip probe/supervise); 1 = free
+has_active_rotate_lock() {
+  local id="$1"
+  clear_stale_rotate_lock "$id"
+  [ -f "${PID_DIR}/rotate-${id}.lock" ]
+}
+
+# log at most once per interval seconds for a key (default 300s)
+log_throttled() {
+  local key="$1"
+  local interval="${2:-${LOG_THROTTLE_SEC:-300}}"
+  shift 2
+  local f now=0 last=0
+  mkdir -p "${PID_DIR}"
+  f="${PID_DIR}/log-throttle-${key}.ts"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  last="$(cat "$f" 2>/dev/null || echo 0)"
+  if [ "$now" -gt 0 ] && [ "$last" -gt 0 ] && \
+     [ "$((now - last))" -lt "$interval" ] 2>/dev/null; then
+    return 0
+  fi
+  echo "$now" >"$f" 2>/dev/null || true
+  log "$@"
+}
+
 # return 0 = may enter healthy.json backends; 1 = skip backends
-# pooled missing → true; rotate lock → not eligible
+# pooled missing → true; active rotate lock → not eligible
 is_pool_eligible() {
   local id="$1"
   local meta pooled
-  if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
+  if has_active_rotate_lock "$id"; then
     return 1
   fi
   meta="$(instance_dir "$id")/meta.json"

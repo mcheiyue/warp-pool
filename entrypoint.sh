@@ -377,7 +377,7 @@ while true; do
     [ -d "$d" ] || continue
     id="$(basename "$d")"
     [[ "$id" =~ ^[0-9]+$ ]] || continue
-    if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
+    if has_active_rotate_lock "$id"; then
       alive=$((alive + 1))
       continue
     fi
@@ -391,7 +391,8 @@ while true; do
     fi
     # 出池休眠：监督环不复活 unpooled
     if [ "${PARK_ON_UNPOOL}" = "1" ] && ! is_pool_eligible "$id"; then
-      log "instance ${id}: dead + not pooled — leave parked"
+      log_throttled "parked-${id}" "${LOG_THROTTLE_SEC:-300}" \
+        "instance ${id}: dead + not pooled — leave parked"
       continue
     fi
     log "instance ${id}: dead, restarting"

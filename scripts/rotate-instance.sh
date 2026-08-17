@@ -95,16 +95,10 @@ rotate_one() {
   local lock="${PID_DIR}/rotate-${id}.lock"
   local prev_pooled
   mkdir -p "${PID_DIR}"
-  # 兜底：残留 rotate 锁（ts 超过 LOCK_STALE_SEC）自动清理
-  if [ -f "$lock" ] && [ "${LOCK_STALE_SEC}" -gt 0 ] 2>/dev/null; then
-    local now lock_ts
-    now="$(date +%s 2>/dev/null || echo 0)"
-    lock_ts="$(cat "${lock}.ts" 2>/dev/null || echo 0)"
-    if [ "$now" -gt 0 ] && [ "$lock_ts" -gt 0 ] && \
-       [ "$((now - lock_ts))" -ge "${LOCK_STALE_SEC}" ]; then
-      err "rotate lock stale (${lock_ts} ts, ${now} now) — cleaning"
-      rm -f "$lock" "${lock}.ts" 2>/dev/null || true
-    fi
+  clear_stale_rotate_lock "$id"
+  if [ -f "$lock" ]; then
+    err "instance ${id}: rotate already in progress"
+    return 1
   fi
   echo $$ > "$lock"
   date +%s > "${lock}.ts" 2>/dev/null || true

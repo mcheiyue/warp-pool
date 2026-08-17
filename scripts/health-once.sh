@@ -35,15 +35,17 @@ while read -r id; do
     fi
   fi
 
-  if [ -f "${PID_DIR}/rotate-${id}.lock" ]; then
-    log "instance ${id}: rotate in progress — skip"
+  if has_active_rotate_lock "$id"; then
+    log_throttled "rotate-skip-${id}" "${LOG_THROTTLE_SEC:-300}" \
+      "instance ${id}: rotate in progress — skip"
     continue
   fi
 
   if [ "$alive" -eq 0 ]; then
     # 出池休眠：不拉起；入池才监督重启
     if ! is_pool_eligible "$id"; then
-      log "instance ${id}: process dead + not pooled — leave parked"
+      log_throttled "parked-${id}" "${LOG_THROTTLE_SEC:-300}" \
+        "instance ${id}: process dead + not pooled — leave parked"
       # 不改 pooled/exclude，仅标 unhealthy + 清空运行态
       write_meta "$id" false "" "$failures" "$last_rotate" "" "" false
       continue
