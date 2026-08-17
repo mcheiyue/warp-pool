@@ -54,7 +54,15 @@ if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
   log "instance ${id}: daemon not Connected yet (continue register/connect)"
 fi
 
-if [ ! -f "${state}/reg.json" ] && ! find "$state" -name 'reg.json' 2>/dev/null | grep -q .; then
+# Official client stores registration in warp.db / daemon — not necessarily reg.json.
+# "registration new" while already registered returns "Old registration is still around".
+has_warp_registration() {
+  wcli "$id" registration show 2>/dev/null | grep -qi "Account type"
+}
+
+if has_warp_registration; then
+  log "instance ${id}: registration already present — reuse"
+else
   log "instance ${id}: registration new"
   reg_ok=0
   for attempt in 1 2 3 4 5 6; do
@@ -62,6 +70,13 @@ if [ ! -f "${state}/reg.json" ] && ! find "$state" -name 'reg.json' 2>/dev/null 
       reg_ok=1
       break
     fi
+    # new failed: either still registered, or transient — prefer reuse over hard fail
+    if has_warp_registration; then
+      log "instance ${id}: registration present after new failure — reuse"
+      reg_ok=1
+      break
+    fi
+    wcli "$id" registration delete 2>/dev/null || true
     sleep $((attempt * 2 + RANDOM % 2))
   done
   if [ "$reg_ok" -ne 1 ]; then
