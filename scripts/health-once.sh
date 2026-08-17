@@ -104,5 +104,11 @@ while read -r id; do
   fi
 done < <(list_instance_ids)
 
-echo "{\"backends\": ${backends_json}}" | jq -c . > "${DATA_DIR}/state/healthy.json"
+healthy_tmp="${DATA_DIR}/state/healthy.json.tmp.$$"
+if printf '{"backends": %s}\n' "$backends_json" | jq -c . > "$healthy_tmp"; then
+  mv -f "$healthy_tmp" "${DATA_DIR}/state/healthy.json"
+else
+  rm -f "$healthy_tmp"
+  exit 1
+fi
 log "healthy.json updated: $(cat "${DATA_DIR}/state/healthy.json")"
