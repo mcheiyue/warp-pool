@@ -1,25 +1,22 @@
 #!/usr/bin/env bash
-# One health pass: probe all instances via in-ns SOCKS, update meta + healthy.json
-# v0.5.7: single-flight; collision≠failures; auto-rotate AFTER lock release
+# health-once v0.6: seat grant/deny; protect seated; no collision auto-kick
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 FAILURES_THR="${HEALTH_FAILURES:-3}"
 AUTO_ROTATE="${HEALTH_AUTO_ROTATE:-0}"
-COLLISION_THR="${COLLISION_ROTATE_THR:-3}"
+AUTO_REDRAW="${AUTO_REDRAW_ON_COLLISION:-0}"
 
 mkdir -p "${DATA_DIR}/state" "${PID_DIR}"
 
-# P1.1 single-flight — must NOT hold lock across rotate (minutes)
 exec 8>"${PID_DIR}/health-once.lock"
 if ! flock -n 8; then
   log "health-once already running — skip"
   exit 0
 fi
 
-# deferred work AFTER lock release (must not block single-flight)
-to_rotate=()
 to_start=()
+to_redraw=()
 
 while read -r id; do
   [ -n "$id" ] || continue
@@ -82,12 +79,14 @@ while read -r id; do
       if v4_conflicts "$id" "$ip"; then
         release_unique_lock
         collision_streak=$((collision_streak + 1))
+        # deny seat; keep process; NEVER rotate an already-seated peer
         write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
         meta_set_field "$id" collision_streak "$collision_streak" 2>/dev/null || true
-        log "instance ${id}: v4 collision ${ip} — collision_streak=${collision_streak}"
-        if [ "$AUTO_ROTATE" = "1" ] && [ "$collision_streak" -ge "$COLLISION_THR" ]; then
+        log "seat deny id=${id} ip=${ip} reason=v4_collision streak=${collision_streak}"
+        # optional: redraw only THIS candidate if not already seated and switch on
+        if [ "$AUTO_REDRAW" = "1" ] && ! is_seated "$id"; then
           if auto_rotate_allowed "$id"; then
-            to_rotate+=("${id}|${ROTATE_MODE:-restart}|collision")
+            to_redraw+=("$id")
           fi
         fi
       else
@@ -101,22 +100,23 @@ while read -r id; do
         meta_set_field "$id" collision_streak 0 2>/dev/null || true
         release_unique_lock
         if is_pool_eligible "$id"; then
-          log "instance ${id}: healthy v4=${ip} unique=true pooled socks=$(socks_addr "$id")"
+          log "seat grant id=${id} ip=${ip} pooled socks=$(socks_addr "$id")"
         else
-          log "instance ${id}: healthy v4=${ip} unique=true but not pooled — skip backends"
+          log "instance ${id}: healthy v4=${ip} unique but not pooled — skip backends"
         fi
       fi
     else
       write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
-      log "instance ${id}: unique lock busy — skip pool this pass v4=${ip}"
+      log "instance ${id}: unique lock busy — skip seat this pass v4=${ip}"
     fi
   else
     failures=$((failures + 1))
     write_meta "$id" false "" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
     log "instance ${id}: probe fail failures=${failures}"
+    # probe fail: only start-level recovery via AUTO_ROTATE (legacy) — prefer start not hard
     if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
-      if auto_rotate_allowed "$id"; then
-        to_rotate+=("${id}|${ROTATE_MODE:-restart}|probe")
+      if auto_rotate_allowed "$id" && ! is_seated "$id"; then
+        to_redraw+=("$id")
       fi
     fi
   fi
@@ -125,7 +125,6 @@ done < <(list_instance_ids)
 rebuild_healthy_json || true
 log "healthy.json updated: $(cat "${DATA_DIR}/state/healthy.json" 2>/dev/null || echo '{}')"
 
-# release single-flight BEFORE long start/rotate
 exec 8>&- || true
 
 for sid in "${to_start[@]+"${to_start[@]}"}"; do
@@ -134,18 +133,18 @@ for sid in "${to_start[@]+"${to_start[@]}"}"; do
   bash "${SCRIPTS_DIR}/start-instance.sh" "$sid" || true
 done
 
-for item in "${to_rotate[@]+"${to_rotate[@]}"}"; do
-  [ -n "$item" ] || continue
-  rid="${item%%|*}"
-  rest="${item#*|}"
-  rmode="${rest%%|*}"
-  rwhy="${rest##*|}"
-  log "instance ${rid}: deferred auto rotate (${rmode}) why=${rwhy}"
-  bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" "$rmode" || true
+# candidate redraw only (hard); never touches seated peers inside rotate of self
+for rid in "${to_redraw[@]+"${to_redraw[@]}"}"; do
+  [ -n "$rid" ] || continue
+  if is_seated "$rid"; then
+    log "instance ${rid}: skip redraw — already seated (protect)"
+    continue
+  fi
+  log "instance ${rid}: deferred candidate redraw (hard)"
+  bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" hard || true
 done
 
-# refresh backends after deferred starts (rotate does its own rebuild)
-if [ "${#to_start[@]}" -gt 0 ]; then
-  sleep 3
+if [ "${#to_start[@]}" -gt 0 ] || [ "${#to_redraw[@]}" -gt 0 ]; then
+  sleep 2
   rebuild_healthy_json || true
 fi

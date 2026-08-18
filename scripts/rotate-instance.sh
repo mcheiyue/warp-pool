@@ -1,25 +1,21 @@
 #!/usr/bin/env bash
-# rotate-instance.sh <id|all> [restart|hard]
-# restart (default) = kill warp-svc+gost exact PIDs, start again, keep STATE — changes v4
-# hard = wipe STATE + re-register + restart
-# soft|reconnect accepted as aliases of restart (v0.2 compat)
-# After probe: v4 must be unique vs other healthy instances (V4_UNIQUE=1)
-# v0.5.7: same-IP accepted if unique; no nested full health-once; fail streak cooldown
+# rotate-instance.sh <id|all> [hard|restart]
+# v0.6 default = hard (chen redraw: wipe STATE). restart = keep STATE reconnect.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-TARGET="${1:?usage: rotate-instance.sh <id|all> [restart|hard]}"
-MODE="${2:-${ROTATE_MODE:-restart}}"
+TARGET="${1:?usage: rotate-instance.sh <id|all> [hard|restart]}"
+MODE="${2:-${ROTATE_MODE:-hard}}"
 COOLDOWN="${ROTATE_COOLDOWN:-300}"
 GAP="${ROTATE_ALL_GAP:-15}"
+REDRAW_MAX="${REDRAW_MAX:-2}"
 
 case "$MODE" in
-  soft|reconnect|restart|"") MODE=restart ;;
-  hard) MODE=hard ;;
-  *) err "unknown mode: $MODE (use restart|hard)"; exit 2 ;;
+  soft|reconnect|restart) MODE=restart ;;
+  hard|"") MODE=hard ;;
+  *) err "unknown mode: $MODE (use hard|restart)"; exit 2 ;;
 esac
 
-# restore pooled after temporary rotate drain (RETURN trap)
 _restore_rotate_drain() {
   local id="$1"
   local prev="$2"
@@ -39,12 +35,12 @@ _rotate_cycle() {
   local id="$1"
   local cycle_mode="$2"
   if [ "$cycle_mode" = "hard" ]; then
-    log "instance ${id}: hard — wipe STATE + restart"
+    log "instance ${id}: hard redraw — wipe STATE + re-register (chen-aligned)"
     bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
     rm -rf "$(instance_state_dir "$id")"
     mkdir -p "$(instance_state_dir "$id")"
   else
-    log "instance ${id}: restart warp-svc (keep STATE) — v0.3 rotate"
+    log "instance ${id}: restart warp-svc (keep STATE) — reconnect"
     bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
   fi
   bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
@@ -66,7 +62,6 @@ rotate_one() {
   local id="$1"
   local dir meta last now last_epoch delta
   local ts attempts=0
-  local rc=1
   dir="$(instance_dir "$id")"
   if [ ! -d "$dir" ]; then
     err "instance ${id}: not found"
@@ -121,21 +116,20 @@ rotate_one() {
     jq '.pooled=false | .exclude_reason="drain" | .drain_restore_pooled=false' \
       "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   fi
-  # drop self from backends without full health pass
   rebuild_healthy_json || true
 
   local baseline_ip="$old_ip"
 
-  # P0.1: same IP OK if unique in pool; only fail when same AND conflicts with peer
-  _commit_changed_unique() {
+  # commit if unique vs other seats; same baseline OK when unique
+  _commit_seat() {
     local cid="$1" cip="$2" cts="$3" creason="$4"
     if [ -n "$baseline_ip" ] && [ "$cip" = "$baseline_ip" ]; then
       if v4_conflicts "$cid" "$cip"; then
-        log "instance ${cid}: same v4 ${cip} + pool conflict — retry"
+        log "instance ${cid}: same v4 ${cip} + pool conflict — fail"
         return 1
       fi
-      log "instance ${cid}: same v4 ${cip} but unique in pool — accept"
-      creason="${creason%:*}:same-ip-unique"
+      log "instance ${cid}: same v4 ${cip} but unique — accept (redraw sticky)"
+      creason="${creason}:same-ip-ok"
     fi
     if [ "${V4_UNIQUE}" = "0" ]; then
       write_meta "$cid" true "$cip" 0 "$cts" "$(cat "$(pidfile_svc "$cid")" 2>/dev/null || true)" "" true
@@ -149,6 +143,7 @@ rotate_one() {
     return 1
   }
 
+  # first cycle uses MODE; further uniqueness retries always hard (redraw)
   _rotate_cycle "$id" "$MODE"
   attempts=1
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -161,55 +156,37 @@ rotate_one() {
     return 1
   fi
 
-  if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:${MODE}"; then
-    log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} unique=true attempts=${attempts}"
+  if _commit_seat "$id" "$_ROTATE_IP" "$ts" "rotate:${MODE}"; then
+    log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} seat attempts=${attempts}"
     mark_rotate_success "$id"
     rebuild_healthy_json || true
     return 0
   fi
 
-  log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} — uniqueness retries"
+  log "instance ${id}: v4 conflict ${_ROTATE_IP} — hard redraw retries (max ${REDRAW_MAX})"
 
   local r
-  for r in $(seq 1 "${V4_UNIQUE_RETRIES}"); do
-    sleep "${V4_UNIQUE_BACKOFF}"
-    _rotate_cycle "$id" restart
-    attempts=$((attempts + 1))
-    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if [ "$_ROTATE_OK" != 1 ]; then
-      log "instance ${id}: probe fail on unique restart ${r}/${V4_UNIQUE_RETRIES}"
-      continue
-    fi
-    if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:restart"; then
-      log "instance ${id}: rotate ok mode=restart v4=${_ROTATE_IP} unique=true attempts=${attempts}"
-      mark_rotate_success "$id"
-      rebuild_healthy_json || true
-      return 0
-    fi
-    log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (restart ${r}/${V4_UNIQUE_RETRIES})"
-  done
-
-  for r in $(seq 1 "${V4_UNIQUE_HARD_RETRIES}"); do
+  for r in $(seq 1 "${REDRAW_MAX}"); do
     sleep "${V4_UNIQUE_BACKOFF}"
     _rotate_cycle "$id" hard
     attempts=$((attempts + 1))
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [ "$_ROTATE_OK" != 1 ]; then
-      log "instance ${id}: probe fail on unique hard ${r}/${V4_UNIQUE_HARD_RETRIES}"
+      log "instance ${id}: probe fail on hard redraw ${r}/${REDRAW_MAX}"
       continue
     fi
-    if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:hard"; then
-      log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} unique=true attempts=${attempts}"
+    if _commit_seat "$id" "$_ROTATE_IP" "$ts" "rotate:hard"; then
+      log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} seat attempts=${attempts}"
       mark_rotate_success "$id"
       rebuild_healthy_json || true
       return 0
     fi
-    log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (hard ${r}/${V4_UNIQUE_HARD_RETRIES})"
+    log "instance ${id}: still conflict ${_ROTATE_IP} (hard ${r}/${REDRAW_MAX})"
   done
 
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   write_meta "$id" false "${_ROTATE_IP:-}" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
-  err "instance ${id}: v4_collision exhausted v4=${_ROTATE_IP:-} attempts=${attempts}"
+  err "instance ${id}: seat deny after redraw v4=${_ROTATE_IP:-} attempts=${attempts}"
   mark_rotate_fail "$id"
   rebuild_healthy_json || true
   return 1

@@ -623,7 +623,8 @@ func runControl(args []string) {
 		q := r.URL.Query()
 		mode := q.Get("mode")
 		if mode == "" {
-			mode = "restart" // v0.3 default; soft|reconnect alias → restart in rotate-instance.sh
+			// v0.6: chen-aligned hard redraw; override via ?mode=restart or ROTATE_MODE
+			mode = envOr("ROTATE_MODE", "hard")
 		}
 		script := filepath.Join(scripts, "rotate-instance.sh")
 		var cmd *exec.Cmd
@@ -999,13 +1000,11 @@ func readPool(data string) map[string]any {
 		}
 		members = append(members, m)
 	}
-	// P2.2: excluded only if unpooled or unhealthy — never healthy+pooled not-yet-in-backends
+	// v0.6: excluded = not seated; reason not_unique | unhealthy | manual | …
 	excluded := make([]map[string]any, 0)
+	aliveCount := 0
 	for _, it := range inst {
 		id := intFrom(it["id"])
-		if memberIDs[id] {
-			continue
-		}
 		pooled := true
 		if p, ok := it["pooled"].(bool); ok {
 			pooled = p
@@ -1014,8 +1013,17 @@ func readPool(data string) map[string]any {
 		if h, ok := it["healthy"].(bool); ok {
 			healthy = h
 		}
-		if pooled && healthy {
-			// transient (unique lock / rebuild lag) — not an exclusion
+		unique := false
+		if u, ok := it["unique"].(bool); ok {
+			unique = u
+		}
+		// alive ≈ has pid string or healthy/unique/v4 present
+		if pid, ok := it["pid"].(string); ok && pid != "" {
+			aliveCount++
+		} else if v4, ok := it["v4"].(string); ok && v4 != "" {
+			aliveCount++
+		}
+		if memberIDs[id] {
 			continue
 		}
 		ex := map[string]any{"id": id, "pooled": it["pooled"], "healthy": it["healthy"]}
@@ -1027,13 +1035,20 @@ func readPool(data string) map[string]any {
 			reason = r
 		} else if !pooled {
 			reason = "manual"
+		} else if !healthy && unique {
+			reason = "transient"
+		} else if !unique && (healthy || (func() bool {
+			v, _ := it["v4"].(string)
+			return v != ""
+		})()) {
+			reason = "not_unique"
 		} else if !healthy {
 			reason = "unhealthy"
 		}
 		ex["reason"] = reason
 		excluded = append(excluded, ex)
 	}
-	// P2.1: sticky only if target is a current backend member
+	// sticky only if seated
 	var sticky any
 	if st, err := loadSticky(stickyPath(data)); err == nil && st != nil {
 		if memberIDs[st.ID] {
@@ -1046,15 +1061,17 @@ func readPool(data string) map[string]any {
 		sticky = nil
 	}
 	listen := envOr("AGG_SOCKS_PORT", ":1080")
-	// AGG_SOCKS_PORT may be bare port; keep as-is for display
 	return map[string]any{
-		"enabled":  loadAggEnabled(aggEnabledPath(data)),
-		"strategy": "rr",
-		"listen":   listen,
-		"sticky":   sticky,
-		"members":  members,
-		"excluded": excluded,
-		"ts":       time.Now().UTC().Format(time.RFC3339),
+		"enabled":     loadAggEnabled(aggEnabledPath(data)),
+		"strategy":    "rr",
+		"listen":      listen,
+		"sticky":      sticky,
+		"members":     members,
+		"seats":       members,
+		"seat_count":  len(members),
+		"alive_count": aliveCount,
+		"excluded":    excluded,
+		"ts":          time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -1246,7 +1263,7 @@ func getConfig(listen, token string) map[string]any {
 	return map[string]any{
 		"warp_instances":         envOr("WARP_INSTANCES", "0"),
 		"rotate_cooldown":        envOr("ROTATE_COOLDOWN", "300"),
-		"rotate_mode":            envOr("ROTATE_MODE", "restart"),
+		"rotate_mode":            envOr("ROTATE_MODE", "hard"),
 		"v4_unique":              envOr("V4_UNIQUE", "1"),
 		"v4_unique_retries":      envOr("V4_UNIQUE_RETRIES", "3"),
 		"v4_unique_hard_retries": envOr("V4_UNIQUE_HARD_RETRIES", "1"),

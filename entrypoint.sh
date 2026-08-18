@@ -269,8 +269,9 @@ for id in "${BOOT_IDS[@]}"; do
     fi
   fi
 
+  # v0.6: start only — one-shot seat try, NO unique thrash (禁互踢)
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
-    ready=0
+    started=$((started + 1))
     probed=0
     for ((t = 0; t < BOOT_HEALTH_WAIT; t += 3)); do
       if probe_instance "$id" >/dev/null; then
@@ -281,19 +282,12 @@ for id in "${BOOT_IDS[@]}"; do
     done
     if [ "$probed" = "1" ]; then
       if ip="$(ensure_instance_unique "$id")"; then
-        log "instance ${id}: ready v4=${ip} unique=true"
-        ready=1
+        log "instance ${id}: boot seat grant v4=${ip}"
       else
-        err "instance ${id}: healthy probe but v4_collision (not ready)"
+        log "instance ${id}: boot alive but not seated (v4 collision or busy) — keep running"
       fi
-    fi
-    if [ "$ready" = "1" ]; then
-      started=$((started + 1))
     else
-      err "instance ${id}: started but not healthy/unique within ${BOOT_HEALTH_WAIT}s"
-      if [ "$PARTIAL_REGISTER_POLICY" = "fail" ]; then
-        exit 1
-      fi
+      err "instance ${id}: started but probe failed within ${BOOT_HEALTH_WAIT}s"
     fi
   else
     err "instance ${id}: failed to start"
@@ -309,8 +303,9 @@ if [ "$started" -lt 1 ]; then
 fi
 
 log "started ${started}/${#BOOT_IDS[@]} boot instance(s) (desired=$(_read_desired_n))"
-# Do not start dead leftover dirs during boot — supervisor restarts after control is up
+# one seat pass after all boots (no thrash)
 SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+rebuild_healthy_json || true
 
 
 

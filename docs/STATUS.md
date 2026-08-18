@@ -1,7 +1,8 @@
 # STATUS — warp-pool
 
-**Next/ship: v0.5.7 自愈逻辑纠偏** — [pivot-v0.5.7-selfheal.md](./pivot-v0.5.7-selfheal.md) · [plan](../.omo/plans/v0.5.7-selfheal-logic.md)  
-**Code**: P0–P2 已合 main（同 IP unique 接受、rotate 冷却、短 start 锁、不 all-dead exit、health 单飞、rebuild_healthy、sticky 跟随）  
+**Shipping: v0.6 互异座位 + hard 重抽** — [pivot-v0.6-unique-seat.md](./pivot-v0.6-unique-seat.md) · [plan](../.omo/plans/v0.6-unique-seat-hard-rotate.md)  
+**Code**: `ROTATE_MODE=hard`；boot/health 一锤子入座、禁互踢；collision 默认不 auto-rotate；`seat_count`/`not_unique`  
+**现网**: 部署 tip 后启  
 **Primary (code): v0.5 可控聚合池** — [pivot-v0.5-aggregate-pool.md](./pivot-v0.5-aggregate-pool.md) · [plan](../.omo/plans/v0.5-aggregate-pool.md)  
 **Shipped baseline: v0.4** — [pivot-v0.4.md](./pivot-v0.4.md) · ADR-016  
 **Baseline: v0.3** shipped  

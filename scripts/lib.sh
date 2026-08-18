@@ -24,8 +24,13 @@ V4_UNIQUE_LOCK_TIMEOUT="${V4_UNIQUE_LOCK_TIMEOUT:-60}"
 ROTATE_FAIL_STREAK_MAX="${ROTATE_FAIL_STREAK_MAX:-2}"
 ROTATE_COOLDOWN_SEC="${ROTATE_COOLDOWN_SEC:-1800}"
 COLLISION_ROTATE_THR="${COLLISION_ROTATE_THR:-3}"
+# v0.6 seat + redraw
+REDRAW_MAX="${REDRAW_MAX:-2}"
+AUTO_REDRAW_ON_COLLISION="${AUTO_REDRAW_ON_COLLISION:-0}"
 # entrypoint: do not suicide whole container on transient all-dead
 SUPERVISE_EXIT_ON_ALL_DEAD="${SUPERVISE_EXIT_ON_ALL_DEAD:-0}"
+# default rotate mode (chen redraw)
+ROTATE_MODE="${ROTATE_MODE:-hard}"
 
 log() { echo "==> [warp-pool] $*"; }
 err() { echo "==> [warp-pool][ERROR] $*" >&2; }
@@ -567,16 +572,11 @@ commit_if_unique() {
   return 0
 }
 
-# boot/ready helper: probe then ensure unique via restart then hard (COOLDOWN=0)
-# return 0 if unique healthy; 1 otherwise. echoes v4 on success.
+# v0.6: one-shot seat try — NO restart/hard thrash (boot/health must not互踢)
+# return 0 if seated; 1 otherwise. echoes v4 on success.
 ensure_instance_unique() {
   local id="$1"
-  local ip="" ok=0 attempt=0
-  local max_restart="${V4_UNIQUE_RETRIES}"
-  local max_hard="${V4_UNIQUE_HARD_RETRIES}"
-  local backoff="${V4_UNIQUE_BACKOFF}"
-  local ts pid
-
+  local ip="" pid
   if [ "${V4_UNIQUE}" = "0" ]; then
     if ip="$(probe_instance "$id")"; then
       write_meta "$id" true "$ip" 0 "" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" true
@@ -585,79 +585,36 @@ ensure_instance_unique() {
     fi
     return 1
   fi
-
-  if ip="$(probe_instance "$id")"; then
-    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
-      echo "$ip"
-      return 0
-    fi
-    log "instance ${id}: v4 collision ${ip} at boot — retry uniqueness"
-  else
+  if ! ip="$(probe_instance "$id")"; then
     return 1
   fi
-
-  export SUPERVISE_RESTART=0
-  attempt=0
-  while [ "$attempt" -lt "$max_restart" ]; do
-    attempt=$((attempt + 1))
-    log "instance ${id}: unique restart attempt ${attempt}/${max_restart} after v4=${ip}"
-    sleep "$backoff"
-    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
-    bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
-    bash "${SCRIPTS_DIR}/start-instance.sh" "$id"
-    sleep 5
-    ok=0
-    ip=""
-    for _ in 1 2 3 4 5 6 7 8; do
-      if ip="$(probe_instance "$id")"; then
-        ok=1
-        break
-      fi
-      sleep 3
-    done
-    [ "$ok" = 1 ] || continue
-    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
-      echo "$ip"
-      return 0
-    fi
-    log "instance ${id}: v4 collision ${ip} (restart attempt ${attempt})"
-  done
-
-  attempt=0
-  while [ "$attempt" -lt "$max_hard" ]; do
-    attempt=$((attempt + 1))
-    log "instance ${id}: unique hard attempt ${attempt}/${max_hard}"
-    sleep "$backoff"
-    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
-    rm -rf "$(instance_state_dir "$id")"
-    mkdir -p "$(instance_state_dir "$id")"
-    bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id"
-    bash "${SCRIPTS_DIR}/start-instance.sh" "$id"
-    sleep 5
-    ok=0
-    ip=""
-    for _ in 1 2 3 4 5 6 7 8; do
-      if ip="$(probe_instance "$id")"; then
-        ok=1
-        break
-      fi
-      sleep 3
-    done
-    [ "$ok" = 1 ] || continue
-    pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
-    if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
-      echo "$ip"
-      return 0
-    fi
-    log "instance ${id}: v4 collision ${ip} (hard attempt ${attempt})"
-  done
-
-  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  write_meta "$id" false "${ip:-}" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
-  err "instance ${id}: v4_collision exhausted at boot v4=${ip:-}"
+  pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
+  if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
+    log "seat grant id=${id} ip=${ip}"
+    echo "$ip"
+    return 0
+  fi
+  write_meta "$id" false "$ip" 0 "" "$pid" "" false
+  meta_set_field "$id" collision_streak 1 2>/dev/null || true
+  log "seat deny id=${id} ip=${ip} reason=v4_collision"
   return 1
+}
+
+# return 0 if id is currently a seat (in backends or meta healthy+unique+alive)
+is_seated() {
+  local id="$1"
+  local meta pidfile pid hf
+  hf="${DATA_DIR}/state/healthy.json"
+  if [ -f "$hf" ] && jq -e --argjson sid "$id" '.backends|map(.id)|index($sid)!=null' "$hf" >/dev/null 2>&1; then
+    return 0
+  fi
+  meta="$(instance_dir "$id")/meta.json"
+  [ -f "$meta" ] || return 1
+  jq -e '.healthy==true and .unique==true' "$meta" >/dev/null 2>&1 || return 1
+  pidfile="$(pidfile_svc "$id")"
+  [ -f "$pidfile" ] || return 1
+  pid="$(cat "$pidfile" 2>/dev/null || true)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
 }
 
 # Probe via in-ns SOCKS (microsocks|gost); force IPv4 for pool health
