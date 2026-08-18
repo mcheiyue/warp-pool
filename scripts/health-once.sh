@@ -41,6 +41,16 @@ while read -r id; do
     continue
   fi
 
+  # rotate 残骸：exclude_reason=drain 且无锁 → 按 drain_restore_pooled 恢复
+  # 不碰 manual / guard-l1 / guard-probe
+  if heal_stale_rotate_drain "$id"; then
+    # refresh local view after heal
+    if [ -f "$meta" ]; then
+      failures="$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)"
+      last_rotate="$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)"
+    fi
+  fi
+
   if [ "$alive" -eq 0 ]; then
     # 出池休眠：不拉起；入池才监督重启
     if ! is_pool_eligible "$id"; then

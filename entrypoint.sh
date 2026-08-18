@@ -259,7 +259,9 @@ for id in "${BOOT_IDS[@]}"; do
   fi
   boot_idx=$((boot_idx + 1))
 
-  # 出池休眠：启动时不拉起 unpooled 实例
+  # rotate 残骸 drain 先自愈，再判断是否 boot skip
+  heal_stale_rotate_drain "$id" || true
+  # 出池休眠：启动时不拉起 unpooled 实例（manual/guard 仍 skip）
   if [ "${PARK_ON_UNPOOL}" = "1" ] && [ -f "$(instance_dir "$id")/meta.json" ]; then
     if ! is_pool_eligible "$id"; then
       log "instance ${id}: boot skip (not pooled, PARK_ON_UNPOOL=1)"
@@ -389,6 +391,8 @@ while true; do
         continue
       fi
     fi
+    # rotate 残骸 drain 先自愈（仅 reason=drain；manual/guard 不动）
+    heal_stale_rotate_drain "$id" || true
     # 出池休眠：监督环不复活 unpooled
     if [ "${PARK_ON_UNPOOL}" = "1" ] && ! is_pool_eligible "$id"; then
       log_throttled "parked-${id}" "${LOG_THROTTLE_SEC:-300}" \

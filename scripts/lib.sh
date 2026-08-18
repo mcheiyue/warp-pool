@@ -150,6 +150,7 @@ write_meta() {
   local dir meta
   local pooled="true"
   local exclude_reason=""
+  local drain_restore=""
   local set_pooled=0 set_exclude=0
   dir="$(instance_dir "$id")"
   mkdir -p "$dir"
@@ -163,6 +164,8 @@ write_meta() {
   if [ -f "$meta" ]; then
     pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
     exclude_reason="$(jq -r '.exclude_reason // empty' "$meta" 2>/dev/null || true)"
+    # preserve rotate-only marker across runtime meta rewrites
+    drain_restore="$(jq -r 'if has("drain_restore_pooled") then (if .drain_restore_pooled then "true" else "false" end) else empty end' "$meta" 2>/dev/null || true)"
   fi
   if [ "$set_pooled" -eq 1 ]; then
     case "${9}" in
@@ -182,6 +185,10 @@ write_meta() {
   fi
   local pooled_json="true"
   [ "$pooled" = "true" ] || pooled_json="false"
+  # drop drain_restore when exclude is no longer drain
+  if [ "$exclude_reason" != "drain" ]; then
+    drain_restore=""
+  fi
   jq -n \
     --argjson id "$id" \
     --argjson healthy "$healthy" \
@@ -194,6 +201,7 @@ write_meta() {
     --argjson unique "$unique" \
     --argjson pooled "$pooled_json" \
     --arg exclude_reason "$exclude_reason" \
+    --arg drain_restore "$drain_restore" \
     --argjson port "$(instance_port "$id")" \
     --argjson expose "$(expose_port "$id")" \
     --arg mode "warp" \
@@ -205,7 +213,9 @@ write_meta() {
       failures:$failures, last_rotate:$last_rotate, pid:$pid,
       port:$port, expose:$expose, mode:$mode, netns:$netns, socks:$socks,
       updated:(now|todate)
-    }' > "${meta}.tmp"
+    } + (if $drain_restore == "true" then {drain_restore_pooled:true}
+         elif $drain_restore == "false" then {drain_restore_pooled:false}
+         else {} end)' > "${meta}.tmp"
   mv "${meta}.tmp" "$meta"
 }
 
@@ -231,6 +241,38 @@ has_active_rotate_lock() {
   local id="$1"
   clear_stale_rotate_lock "$id"
   [ -f "${PID_DIR}/rotate-${id}.lock" ]
+}
+
+# Heal rotate debris only: exclude_reason=="drain" and no active rotate lock.
+# Never touches manual / guard-l1 / guard-probe / other reasons.
+# Uses drain_restore_pooled written by rotate-instance (default true if missing).
+# return 0 if meta was healed; 1 if nothing to do.
+heal_stale_rotate_drain() {
+  local id="$1"
+  local meta reason restore tmp
+  meta="$(instance_dir "$id")/meta.json"
+  [ -f "$meta" ] || return 1
+  if has_active_rotate_lock "$id"; then
+    return 1
+  fi
+  reason="$(jq -r '.exclude_reason // empty' "$meta" 2>/dev/null || true)"
+  [ "$reason" = "drain" ] || return 1
+  restore="$(jq -r 'if has("drain_restore_pooled") then (if .drain_restore_pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
+  tmp="${meta}.tmp.$$"
+  if [ "$restore" = "true" ]; then
+    jq '.pooled=true | .exclude_reason="" | del(.drain_restore_pooled)' "$meta" >"$tmp" && mv "$tmp" "$meta" || {
+      rm -f "$tmp"
+      return 1
+    }
+    log "instance ${id}: heal stale drain → pooled=true (rotate debris)"
+  else
+    jq '.pooled=false | .exclude_reason="" | del(.drain_restore_pooled)' "$meta" >"$tmp" && mv "$tmp" "$meta" || {
+      rm -f "$tmp"
+      return 1
+    }
+    log "instance ${id}: heal stale drain → keep unpooled (prev not pooled)"
+  fi
+  return 0
 }
 
 # log at most once per interval seconds for a key (default 300s)

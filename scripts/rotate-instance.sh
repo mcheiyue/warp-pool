@@ -27,10 +27,10 @@ _restore_rotate_drain() {
   [ -f "$meta" ] || return 0
   tmp="${meta}.tmp.$$"
   if [ "$prev" = "true" ]; then
-    jq '.pooled=true | .exclude_reason=""' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
+    jq '.pooled=true | .exclude_reason="" | del(.drain_restore_pooled)' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
   else
     # keep unpooled; only clear our drain marker
-    jq '.pooled=false | if .exclude_reason=="drain" then .exclude_reason="" else . end' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
+    jq '.pooled=false | del(.drain_restore_pooled) | if .exclude_reason=="drain" then .exclude_reason="" else . end' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
   fi
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 }
@@ -116,8 +116,16 @@ rotate_one() {
 
   write_meta "$id" false "" "$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)" \
     "$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)" "" "" false
-  # write_meta merges pooled; force drain after so mid-rotate stays out of pool
-  jq '.pooled=false | .exclude_reason="drain"' "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
+  # write_meta merges pooled; force drain after so mid-rotate stays out of pool.
+  # drain_restore_pooled: ONLY rotate sets exclude_reason=drain; heal uses this
+  # so manual/guard-l1 never get auto-repool (they never write reason=drain).
+  if [ "$prev_pooled" = "true" ]; then
+    jq '.pooled=false | .exclude_reason="drain" | .drain_restore_pooled=true' \
+      "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
+  else
+    jq '.pooled=false | .exclude_reason="drain" | .drain_restore_pooled=false' \
+      "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
+  fi
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
   # baseline: pre-rotate v4. same IP after rotate = fake success (WARP often keeps 195.192).
