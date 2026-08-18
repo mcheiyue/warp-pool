@@ -120,6 +120,29 @@ rotate_one() {
   jq '.pooled=false | .exclude_reason="drain"' "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 
+  # baseline: pre-rotate v4. same IP after rotate = fake success (WARP often keeps 195.192).
+  local baseline_ip="$old_ip"
+
+  # commit only if IP changed from baseline (when known) AND unique vs other healthy.
+  # returns 0 on success. reason e.g. rotate:restart
+  _commit_changed_unique() {
+    local cid="$1" cip="$2" cts="$3" creason="$4"
+    if [ -n "$baseline_ip" ] && [ "$cip" = "$baseline_ip" ]; then
+      log "instance ${cid}: same v4 ${cip} as pre-rotate — treat as no-change"
+      return 1
+    fi
+    if [ "${V4_UNIQUE}" = "0" ]; then
+      write_meta "$cid" true "$cip" 0 "$cts" "$(cat "$(pidfile_svc "$cid")" 2>/dev/null || true)" "" true
+      append_ip_history "$cid" "$baseline_ip" "$cip" "$creason"
+      return 0
+    fi
+    if commit_if_unique "$cid" "$cip" 0 "$cts" "$(cat "$(pidfile_svc "$cid")" 2>/dev/null || true)"; then
+      append_ip_history "$cid" "$baseline_ip" "$cip" "$creason"
+      return 0
+    fi
+    return 1
+  }
+
   _rotate_cycle "$id" "$MODE"
   attempts=1
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -131,23 +154,13 @@ rotate_one() {
     return 1
   fi
 
-  if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
-    append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:${MODE}"
-    old_ip="$_ROTATE_IP"
+  if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:${MODE}"; then
     log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} unique=true attempts=${attempts}"
     SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
     return 0
   fi
 
-  if [ "${V4_UNIQUE}" = "0" ]; then
-    write_meta "$id" true "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" true
-    append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:${MODE}"
-    log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} (V4_UNIQUE=0)"
-    SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
-    return 0
-  fi
-
-  log "instance ${id}: v4 collision ${_ROTATE_IP} — uniqueness retries"
+  log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} — uniqueness retries"
 
   local r
   for r in $(seq 1 "${V4_UNIQUE_RETRIES}"); do
@@ -159,13 +172,12 @@ rotate_one() {
       log "instance ${id}: probe fail on unique restart ${r}/${V4_UNIQUE_RETRIES}"
       continue
     fi
-    if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
-      append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:restart"
+    if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:restart"; then
       log "instance ${id}: rotate ok mode=restart v4=${_ROTATE_IP} unique=true attempts=${attempts}"
       SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
       return 0
     fi
-    log "instance ${id}: v4 collision ${_ROTATE_IP} (restart ${r}/${V4_UNIQUE_RETRIES})"
+    log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (restart ${r}/${V4_UNIQUE_RETRIES})"
   done
 
   for r in $(seq 1 "${V4_UNIQUE_HARD_RETRIES}"); do
@@ -177,13 +189,12 @@ rotate_one() {
       log "instance ${id}: probe fail on unique hard ${r}/${V4_UNIQUE_HARD_RETRIES}"
       continue
     fi
-    if commit_if_unique "$id" "$_ROTATE_IP" 0 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"; then
-      append_ip_history "$id" "$old_ip" "$_ROTATE_IP" "rotate:hard"
+    if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:hard"; then
       log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} unique=true attempts=${attempts}"
       SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
       return 0
     fi
-    log "instance ${id}: v4 collision ${_ROTATE_IP} (hard ${r}/${V4_UNIQUE_HARD_RETRIES})"
+    log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (hard ${r}/${V4_UNIQUE_HARD_RETRIES})"
   done
 
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
