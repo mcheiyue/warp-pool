@@ -999,10 +999,23 @@ func readPool(data string) map[string]any {
 		}
 		members = append(members, m)
 	}
+	// P2.2: excluded only if unpooled or unhealthy — never healthy+pooled not-yet-in-backends
 	excluded := make([]map[string]any, 0)
 	for _, it := range inst {
 		id := intFrom(it["id"])
 		if memberIDs[id] {
+			continue
+		}
+		pooled := true
+		if p, ok := it["pooled"].(bool); ok {
+			pooled = p
+		}
+		healthy := false
+		if h, ok := it["healthy"].(bool); ok {
+			healthy = h
+		}
+		if pooled && healthy {
+			// transient (unique lock / rebuild lag) — not an exclusion
 			continue
 		}
 		ex := map[string]any{"id": id, "pooled": it["pooled"], "healthy": it["healthy"]}
@@ -1012,17 +1025,23 @@ func readPool(data string) map[string]any {
 		reason := ""
 		if r, ok := it["exclude_reason"].(string); ok && r != "" {
 			reason = r
-		} else if p, ok := it["pooled"].(bool); ok && !p {
+		} else if !pooled {
 			reason = "manual"
-		} else if h, ok := it["healthy"].(bool); ok && !h {
+		} else if !healthy {
 			reason = "unhealthy"
 		}
 		ex["reason"] = reason
 		excluded = append(excluded, ex)
 	}
+	// P2.1: sticky only if target is a current backend member
 	var sticky any
 	if st, err := loadSticky(stickyPath(data)); err == nil && st != nil {
-		sticky = st
+		if memberIDs[st.ID] {
+			sticky = st
+		} else {
+			_ = os.Remove(stickyPath(data))
+			sticky = nil
+		}
 	} else {
 		sticky = nil
 	}

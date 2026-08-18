@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # start-instance.sh <id> — Warp mode inside netns + SOCKS (microsocks|gost) + optional expose
+# v0.5.7: flock only covers warp-svc launch (not register/connect)
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -18,13 +19,7 @@ ensure_host_forward
 ensure_dirs "$id"
 ensure_netns "$id"
 
-# 串行化同 id 的 start（health 与 rotate 并发会双开抢 socket）
 mkdir -p "${PID_DIR}"
-exec 9>"${PID_DIR}/start-${id}.lock"
-if ! flock -w 180 9; then
-  err "instance ${id}: start lock timeout"
-  exit 1
-fi
 
 _warp_svc_alive() {
   local p
@@ -32,7 +27,6 @@ _warp_svc_alive() {
   if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
     return 0
   fi
-  # pidfile 过期时：socket 在且能 status 则回填 pid
   if [ -S "${run}/warp_service" ] || [ -e "${run}/warp_service" ]; then
     if wcli "$id" status 2>/dev/null | grep -qiE 'Status|Connected|Disconnected|Connecting'; then
       p="$(ns_exec "$id" bash -c 'pgrep -x warp-svc | head -1' 2>/dev/null || true)"
@@ -45,7 +39,6 @@ _warp_svc_alive() {
   return 1
 }
 
-# 清残留 IPC，避免 "Unix socket already bound" 秒退
 _clean_warp_runtime() {
   if [ -e "${run}/warp_service" ] || [ -S "${run}/warp_service" ]; then
     fuser -k "${run}/warp_service" 2>/dev/null || true
@@ -57,41 +50,33 @@ _clean_warp_runtime() {
   fi
 }
 
-if _warp_svc_alive; then
-  log "instance ${id}: warp-svc already running pid=$(cat "$pf_svc")"
-else
-  rm -f "$pf_svc"
-fi
-
-# dbus in netns
-if [ ! -S "$dbus_sock" ]; then
-  rm -f "${dbus_dir}/pid" 2>/dev/null || true
-  ns_exec "$id" bash -c "
-    dbus-daemon --address='unix:path=${dbus_sock}' \
-      --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
-    echo \$! > '$pf_dbus'
-  "
-  sleep 1
-fi
+_ensure_dbus() {
+  if [ ! -S "$dbus_sock" ]; then
+    rm -f "${dbus_dir}/pid" 2>/dev/null || true
+    ns_exec "$id" bash -c "
+      dbus-daemon --address='unix:path=${dbus_sock}' \
+        --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
+      echo \$! > '$pf_dbus'
+    "
+    sleep 1
+  fi
+}
 
 _start_warp_svc_once() {
   log "instance ${id}: starting warp-svc in netns $(ns_name "$id")"
   _clean_warp_runtime
-  # write REAL warp-svc pid from inside ns (not ip-netns-exec wrapper)
   ns_exec "$id" bash -c "
     env STATE_DIRECTORY='$state' RUNTIME_DIRECTORY='$run' \
       DBUS_SYSTEM_BUS_ADDRESS='unix:path=${dbus_sock}' \
       warp-svc --accept-tos >/tmp/warp-svc-${id}.log 2>&1 &
     echo \$! > '$pf_svc'
   "
-  # 等 socket 出现或进程退出
   local i
   for i in 1 2 3 4 5 6 7 8; do
     if _warp_svc_alive && { [ -S "${run}/warp_service" ] || [ -e "${run}/warp_service" ]; }; then
       return 0
     fi
     if ! kill -0 "$(cat "$pf_svc" 2>/dev/null || echo 0)" 2>/dev/null; then
-      # 进程已死
       return 1
     fi
     sleep 1
@@ -99,39 +84,44 @@ _start_warp_svc_once() {
   _warp_svc_alive
 }
 
-if ! _warp_svc_alive; then
+# P0.3: short critical section — only launch warp-svc
+(
+  flock -w 30 9 || {
+    err "instance ${id}: start lock timeout"
+    exit 1
+  }
+  if _warp_svc_alive; then
+    log "instance ${id}: warp-svc already running pid=$(cat "$pf_svc")"
+    exit 0
+  fi
+  rm -f "$pf_svc"
+  _ensure_dbus
   _start_warp_svc_once
-  # 秒退（socket 占坑等）：再 stop 清一次后重试
   if ! _warp_svc_alive; then
     log "instance ${id}: warp-svc died after start — clean runtime and retry"
     tail -20 /tmp/warp-svc-"${id}".log 2>/dev/null || true
-    tail -20 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
     bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
-    # stop 可能拆 dbus；重建
-    if [ ! -S "$dbus_sock" ]; then
-      ns_exec "$id" bash -c "
-        dbus-daemon --address='unix:path=${dbus_sock}' \
-          --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
-        echo \$! > '$pf_dbus'
-      "
-      sleep 1
-    fi
+    _ensure_dbus
     _start_warp_svc_once
   fi
   if ! _warp_svc_alive; then
     err "instance ${id}: warp-svc failed to stay up"
     tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
-    tail -40 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
     exit 1
   fi
+) 9>"${PID_DIR}/start-${id}.lock"
+
+if ! _warp_svc_alive; then
+  err "instance ${id}: warp-svc not alive after start section"
+  exit 1
 fi
+
+# --- lock released: register / connect / socks (long path) ---
 
 if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
   log "instance ${id}: daemon not Connected yet (continue register/connect)"
 fi
 
-# Official client stores registration in warp.db / daemon — not necessarily reg.json.
-# "registration new" while already registered returns "Old registration is still around".
 has_warp_registration() {
   wcli "$id" registration show 2>/dev/null | grep -qi "Account type"
 }
@@ -146,7 +136,6 @@ else
       reg_ok=1
       break
     fi
-    # new failed: either still registered, or transient — prefer reuse over hard fail
     if has_warp_registration; then
       log "instance ${id}: registration present after new failure — reuse"
       reg_ok=1
@@ -170,8 +159,6 @@ wcli "$id" connect
 wcli "$id" debug qlog disable 2>/dev/null || true
 wait_daemon_ready "$id" 90 || log "instance ${id}: still not Connected (probe will decide)"
 
-# SOCKS inside ns — traffic follows CloudflareWARP default route
-# Prefer microsocks if present (SOCKS_BIN=microsocks); else gost
 if [ -f "$pf_gost" ]; then
   gpid="$(cat "$pf_gost" || true)"
   if [ -n "$gpid" ] && kill -0 "$gpid" 2>/dev/null; then
@@ -195,7 +182,6 @@ else
 fi
 sleep 1
 
-# expose host 0.0.0.0:11000+id -> ns peer socks
 if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
   exp="$(expose_port "$id")"
   if [ -f "$pf_exp" ]; then
@@ -207,7 +193,6 @@ if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
     rm -f "$pf_exp"
   fi
   log "instance ${id}: expose 0.0.0.0:${exp} -> $(socks_addr "$id")"
-  # must redirect stdio — otherwise parent CombinedOutput (control /rotate) hangs
   warppool expose --listen "0.0.0.0:${exp}" --backend "$(socks_addr "$id")" \
     </dev/null >/tmp/expose-"${id}".log 2>&1 &
   echo $! > "$pf_exp"
@@ -217,7 +202,6 @@ fi
 if ! _warp_svc_alive; then
   err "instance ${id}: warp-svc died before ready (socks up aborted)"
   tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
-  tail -40 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
   exit 1
 fi
 log "instance ${id}: warp+socks up pid=$(cat "$pf_svc") socks=$(socks_addr "$id")"

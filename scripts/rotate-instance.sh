@@ -4,13 +4,14 @@
 # hard = wipe STATE + re-register + restart
 # soft|reconnect accepted as aliases of restart (v0.2 compat)
 # After probe: v4 must be unique vs other healthy instances (V4_UNIQUE=1)
+# v0.5.7: same-IP accepted if unique; no nested full health-once; fail streak cooldown
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 TARGET="${1:?usage: rotate-instance.sh <id|all> [restart|hard]}"
 MODE="${2:-${ROTATE_MODE:-restart}}"
 COOLDOWN="${ROTATE_COOLDOWN:-300}"
-GAP="${ROTATE_ALL_GAP:-30}"
+GAP="${ROTATE_ALL_GAP:-15}"
 
 case "$MODE" in
   soft|reconnect|restart|"") MODE=restart ;;
@@ -29,13 +30,11 @@ _restore_rotate_drain() {
   if [ "$prev" = "true" ]; then
     jq '.pooled=true | .exclude_reason="" | del(.drain_restore_pooled)' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
   else
-    # keep unpooled; only clear our drain marker
     jq '.pooled=false | del(.drain_restore_pooled) | if .exclude_reason=="drain" then .exclude_reason="" else . end' "$meta" >"$tmp" && mv "$tmp" "$meta" || true
   fi
-  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+  rebuild_healthy_json || true
 }
 
-# stop + optional wipe + ensure + start; sets ok/ip for caller via namerefs-ish globals
 _rotate_cycle() {
   local id="$1"
   local cycle_mode="$2"
@@ -67,6 +66,7 @@ rotate_one() {
   local id="$1"
   local dir meta last now last_epoch delta
   local ts attempts=0
+  local rc=1
   dir="$(instance_dir "$id")"
   if [ ! -d "$dir" ]; then
     err "instance ${id}: not found"
@@ -103,11 +103,9 @@ rotate_one() {
   echo $$ > "$lock"
   date +%s > "${lock}.ts" 2>/dev/null || true
 
-  # capture old IP BEFORE drain clears meta.v4
   local old_ip
   old_ip="$(jq -r '.v4 // .ip // empty' "$meta" 2>/dev/null || true)"
 
-  # temporary unpool (drain) so rotate leaves healthy.json backends mid-work
   prev_pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
   # shellcheck disable=SC2064
   trap "rm -f '$lock' '${lock}.ts'; release_unique_lock 2>/dev/null || true; _restore_rotate_drain '$id' '$prev_pooled'" RETURN
@@ -116,9 +114,6 @@ rotate_one() {
 
   write_meta "$id" false "" "$(jq -r '.failures // 0' "$meta" 2>/dev/null || echo 0)" \
     "$(jq -r '.last_rotate // empty' "$meta" 2>/dev/null || true)" "" "" false
-  # write_meta merges pooled; force drain after so mid-rotate stays out of pool.
-  # drain_restore_pooled: ONLY rotate sets exclude_reason=drain; heal uses this
-  # so manual/guard-l1 never get auto-repool (they never write reason=drain).
   if [ "$prev_pooled" = "true" ]; then
     jq '.pooled=false | .exclude_reason="drain" | .drain_restore_pooled=true' \
       "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
@@ -126,18 +121,21 @@ rotate_one() {
     jq '.pooled=false | .exclude_reason="drain" | .drain_restore_pooled=false' \
       "$meta" >"${meta}.tmp.$$" && mv "${meta}.tmp.$$" "$meta"
   fi
-  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+  # drop self from backends without full health pass
+  rebuild_healthy_json || true
 
-  # baseline: pre-rotate v4. same IP after rotate = fake success (WARP often keeps 195.192).
   local baseline_ip="$old_ip"
 
-  # commit only if IP changed from baseline (when known) AND unique vs other healthy.
-  # returns 0 on success. reason e.g. rotate:restart
+  # P0.1: same IP OK if unique in pool; only fail when same AND conflicts with peer
   _commit_changed_unique() {
     local cid="$1" cip="$2" cts="$3" creason="$4"
     if [ -n "$baseline_ip" ] && [ "$cip" = "$baseline_ip" ]; then
-      log "instance ${cid}: same v4 ${cip} as pre-rotate — treat as no-change"
-      return 1
+      if v4_conflicts "$cid" "$cip"; then
+        log "instance ${cid}: same v4 ${cip} + pool conflict — retry"
+        return 1
+      fi
+      log "instance ${cid}: same v4 ${cip} but unique in pool — accept"
+      creason="${creason%:*}:same-ip-unique"
     fi
     if [ "${V4_UNIQUE}" = "0" ]; then
       write_meta "$cid" true "$cip" 0 "$cts" "$(cat "$(pidfile_svc "$cid")" 2>/dev/null || true)" "" true
@@ -158,13 +156,15 @@ rotate_one() {
   if [ "$_ROTATE_OK" != 1 ]; then
     write_meta "$id" false "" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
     err "instance ${id}: probe failed after rotate"
-    SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+    mark_rotate_fail "$id"
+    rebuild_healthy_json || true
     return 1
   fi
 
   if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:${MODE}"; then
     log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} unique=true attempts=${attempts}"
-    SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+    mark_rotate_success "$id"
+    rebuild_healthy_json || true
     return 0
   fi
 
@@ -182,7 +182,8 @@ rotate_one() {
     fi
     if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:restart"; then
       log "instance ${id}: rotate ok mode=restart v4=${_ROTATE_IP} unique=true attempts=${attempts}"
-      SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+      mark_rotate_success "$id"
+      rebuild_healthy_json || true
       return 0
     fi
     log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (restart ${r}/${V4_UNIQUE_RETRIES})"
@@ -199,7 +200,8 @@ rotate_one() {
     fi
     if _commit_changed_unique "$id" "$_ROTATE_IP" "$ts" "rotate:hard"; then
       log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} unique=true attempts=${attempts}"
-      SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+      mark_rotate_success "$id"
+      rebuild_healthy_json || true
       return 0
     fi
     log "instance ${id}: v4 no-change/collision ${_ROTATE_IP} (hard ${r}/${V4_UNIQUE_HARD_RETRIES})"
@@ -208,7 +210,8 @@ rotate_one() {
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   write_meta "$id" false "${_ROTATE_IP:-}" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
   err "instance ${id}: v4_collision exhausted v4=${_ROTATE_IP:-} attempts=${attempts}"
-  SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
+  mark_rotate_fail "$id"
+  rebuild_healthy_json || true
   return 1
 }
 

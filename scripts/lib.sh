@@ -20,6 +20,12 @@ V4_UNIQUE_RETRIES="${V4_UNIQUE_RETRIES:-3}"
 V4_UNIQUE_HARD_RETRIES="${V4_UNIQUE_HARD_RETRIES:-2}"
 V4_UNIQUE_BACKOFF="${V4_UNIQUE_BACKOFF:-5}"
 V4_UNIQUE_LOCK_TIMEOUT="${V4_UNIQUE_LOCK_TIMEOUT:-60}"
+# auto-rotate fuse (P0.2)
+ROTATE_FAIL_STREAK_MAX="${ROTATE_FAIL_STREAK_MAX:-2}"
+ROTATE_COOLDOWN_SEC="${ROTATE_COOLDOWN_SEC:-1800}"
+COLLISION_ROTATE_THR="${COLLISION_ROTATE_THR:-3}"
+# entrypoint: do not suicide whole container on transient all-dead
+SUPERVISE_EXIT_ON_ALL_DEAD="${SUPERVISE_EXIT_ON_ALL_DEAD:-0}"
 
 log() { echo "==> [warp-pool] $*"; }
 err() { echo "==> [warp-pool][ERROR] $*" >&2; }
@@ -151,6 +157,8 @@ write_meta() {
   local pooled="true"
   local exclude_reason=""
   local drain_restore=""
+  local collision_streak=0
+  local rotate_fail_streak=0
   local set_pooled=0 set_exclude=0
   dir="$(instance_dir "$id")"
   mkdir -p "$dir"
@@ -166,6 +174,8 @@ write_meta() {
     exclude_reason="$(jq -r '.exclude_reason // empty' "$meta" 2>/dev/null || true)"
     # preserve rotate-only marker across runtime meta rewrites
     drain_restore="$(jq -r 'if has("drain_restore_pooled") then (if .drain_restore_pooled then "true" else "false" end) else empty end' "$meta" 2>/dev/null || true)"
+    collision_streak="$(jq -r '.collision_streak // 0' "$meta" 2>/dev/null || echo 0)"
+    rotate_fail_streak="$(jq -r '.rotate_fail_streak // 0' "$meta" 2>/dev/null || echo 0)"
   fi
   if [ "$set_pooled" -eq 1 ]; then
     case "${9}" in
@@ -189,6 +199,10 @@ write_meta() {
   if [ "$exclude_reason" != "drain" ]; then
     drain_restore=""
   fi
+  # healthy unique probe success → reset collision streak (caller may override via meta_set)
+  if [ "$healthy" = "true" ] && [ "$unique" = "true" ]; then
+    collision_streak=0
+  fi
   jq -n \
     --argjson id "$id" \
     --argjson healthy "$healthy" \
@@ -202,6 +216,8 @@ write_meta() {
     --argjson pooled "$pooled_json" \
     --arg exclude_reason "$exclude_reason" \
     --arg drain_restore "$drain_restore" \
+    --argjson collision_streak "$collision_streak" \
+    --argjson rotate_fail_streak "$rotate_fail_streak" \
     --argjson port "$(instance_port "$id")" \
     --argjson expose "$(expose_port "$id")" \
     --arg mode "warp" \
@@ -211,6 +227,7 @@ write_meta() {
       id:$id, healthy:$healthy, unique:$unique, pooled:$pooled, exclude_reason:$exclude_reason,
       v4:$v4, v6:$v6, ip:$ip,
       failures:$failures, last_rotate:$last_rotate, pid:$pid,
+      collision_streak:$collision_streak, rotate_fail_streak:$rotate_fail_streak,
       port:$port, expose:$expose, mode:$mode, netns:$netns, socks:$socks,
       updated:(now|todate)
     } + (if $drain_restore == "true" then {drain_restore_pooled:true}
@@ -307,6 +324,110 @@ is_pool_eligible() {
   fi
   pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
   [ "$pooled" = "true" ]
+}
+
+meta_set_field() {
+  local id="$1" key="$2" val="$3"
+  local meta tmp
+  meta="$(instance_dir "$id")/meta.json"
+  [ -f "$meta" ] || return 1
+  tmp="${meta}.tmp.$$"
+  jq --arg k "$key" --argjson v "$val" '.[$k]=$v' "$meta" >"$tmp" && mv "$tmp" "$meta" || rm -f "$tmp"
+}
+
+# return 0 = auto-rotate allowed; 1 = suppressed (cooldown)
+auto_rotate_allowed() {
+  local id="$1"
+  local f now=0 until=0
+  f="${PID_DIR}/rotate-cooldown-${id}.ts"
+  [ -f "$f" ] || return 0
+  now="$(date +%s 2>/dev/null || echo 0)"
+  until="$(cat "$f" 2>/dev/null || echo 0)"
+  if [ "$now" -gt 0 ] && [ "$until" -gt 0 ] && [ "$now" -lt "$until" ]; then
+    log_throttled "rot-cd-${id}" 300 \
+      "instance ${id}: auto-rotate suppressed (cooldown $((until - now))s left)"
+    return 1
+  fi
+  rm -f "$f" 2>/dev/null || true
+  return 0
+}
+
+mark_rotate_success() {
+  local id="$1"
+  rm -f "${PID_DIR}/rotate-cooldown-${id}.ts" 2>/dev/null || true
+  meta_set_field "$id" rotate_fail_streak 0 2>/dev/null || true
+  meta_set_field "$id" collision_streak 0 2>/dev/null || true
+}
+
+mark_rotate_fail() {
+  local id="$1"
+  local meta streak=0 max until
+  meta="$(instance_dir "$id")/meta.json"
+  if [ -f "$meta" ]; then
+    streak="$(jq -r '.rotate_fail_streak // 0' "$meta" 2>/dev/null || echo 0)"
+  fi
+  streak=$((streak + 1))
+  meta_set_field "$id" rotate_fail_streak "$streak" 2>/dev/null || true
+  max="${ROTATE_FAIL_STREAK_MAX:-2}"
+  if [ "$streak" -ge "$max" ] 2>/dev/null; then
+    until=$(( $(date +%s) + ${ROTATE_COOLDOWN_SEC:-1800} ))
+    echo "$until" >"${PID_DIR}/rotate-cooldown-${id}.ts" 2>/dev/null || true
+    log "instance ${id}: rotate fail streak=${streak} → cooldown ${ROTATE_COOLDOWN_SEC:-1800}s"
+  fi
+}
+
+# Rebuild healthy.json from meta (alive + healthy + unique + eligible).
+# Does not start processes. Clears sticky if target not in backends.
+rebuild_healthy_json() {
+  local backends_json="[]" id meta healthy unique pooled v4 pidfile pid alive
+  local sticky_f sticky_id tmp
+  while read -r id; do
+    [ -n "$id" ] || continue
+    meta="$(instance_dir "$id")/meta.json"
+    [ -f "$meta" ] || continue
+    if has_active_rotate_lock "$id"; then
+      continue
+    fi
+    healthy="$(jq -r 'if .healthy==true then "true" else "false" end' "$meta" 2>/dev/null || echo false)"
+    unique="$(jq -r 'if .unique==true then "true" else "false" end' "$meta" 2>/dev/null || echo false)"
+    pooled="$(jq -r 'if has("pooled") then (if .pooled then "true" else "false" end) else "true" end' "$meta" 2>/dev/null || echo true)"
+    [ "$healthy" = "true" ] && [ "$unique" = "true" ] && [ "$pooled" = "true" ] || continue
+    pidfile="$(pidfile_svc "$id")"
+    alive=0
+    if [ -f "$pidfile" ]; then
+      pid="$(cat "$pidfile" 2>/dev/null || true)"
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    fi
+    [ "$alive" -eq 1 ] || continue
+    backends_json="$(echo "$backends_json" | jq -c \
+      --argjson id "$id" \
+      --arg addr "$(socks_addr "$id")" \
+      '. + [{id:$id, addr:$addr}]')"
+  done < <(list_instance_ids)
+
+  mkdir -p "${DATA_DIR}/state"
+  tmp="${DATA_DIR}/state/healthy.json.tmp.$$"
+  if printf '{"backends": %s}\n' "$backends_json" | jq -c . >"$tmp"; then
+    mv -f "$tmp" "${DATA_DIR}/state/healthy.json"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+
+  # sticky: drop if target not in backends
+  sticky_f="${DATA_DIR}/state/sticky.json"
+  if [ -f "$sticky_f" ]; then
+    sticky_id="$(jq -r '.id // empty' "$sticky_f" 2>/dev/null || true)"
+    if [ -n "$sticky_id" ]; then
+      if ! echo "$backends_json" | jq -e --argjson sid "$sticky_id" 'map(.id)|index($sid)!=null' >/dev/null 2>&1; then
+        rm -f "$sticky_f"
+        log "sticky cleared id=${sticky_id} reason=not-member"
+      fi
+    fi
+  fi
+  return 0
 }
 
 # Append one IP change line (rotate success). Keeps last ~200 lines.

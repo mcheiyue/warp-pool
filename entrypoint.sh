@@ -407,8 +407,12 @@ while true; do
   done
 
   if [ "$alive" -lt 1 ] && [ "$desired" -ge 1 ] 2>/dev/null; then
-    err "all warp-svc processes dead (desired=${desired})"
-    exit 1
+    # P0.4: default do NOT exit — container restart amplifies thrash
+    if [ "${SUPERVISE_EXIT_ON_ALL_DEAD:-0}" = "1" ]; then
+      err "all warp-svc processes dead (desired=${desired}) — exit (SUPERVISE_EXIT_ON_ALL_DEAD=1)"
+      exit 1
+    fi
+    log_throttled "all-dead" 60 "all warp-svc dead (desired=${desired}) — stay up, will retry start"
   fi
   sleep 5
 done
