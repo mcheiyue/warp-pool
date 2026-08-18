@@ -18,14 +18,39 @@ ensure_host_forward
 ensure_dirs "$id"
 ensure_netns "$id"
 
+# 串行化同 id 的 start（health 与 rotate 并发会双开抢 socket）
+mkdir -p "${PID_DIR}"
+exec 9>"${PID_DIR}/start-${id}.lock"
+if ! flock -w 180 9; then
+  err "instance ${id}: start lock timeout"
+  exit 1
+fi
+
 _warp_svc_alive() {
   local p
   p="$(cat "$pf_svc" 2>/dev/null || true)"
-  [ -n "$p" ] && kill -0 "$p" 2>/dev/null
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+    return 0
+  fi
+  # pidfile 过期时：socket 在且能 status 则回填 pid
+  if [ -S "${run}/warp_service" ] || [ -e "${run}/warp_service" ]; then
+    if wcli "$id" status 2>/dev/null | grep -qiE 'Status|Connected|Disconnected|Connecting'; then
+      p="$(ns_exec "$id" bash -c 'pgrep -x warp-svc | head -1' 2>/dev/null || true)"
+      if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+        echo "$p" >"$pf_svc"
+        return 0
+      fi
+    fi
+  fi
+  return 1
 }
 
 # 清残留 IPC，避免 "Unix socket already bound" 秒退
 _clean_warp_runtime() {
+  if [ -e "${run}/warp_service" ] || [ -S "${run}/warp_service" ]; then
+    fuser -k "${run}/warp_service" 2>/dev/null || true
+    sleep 0.3
+  fi
   rm -f "${run}/warp_service" 2>/dev/null || true
   if [ -d "$run" ]; then
     find "$run" -maxdepth 1 -type s -delete 2>/dev/null || true
@@ -59,7 +84,19 @@ _start_warp_svc_once() {
       warp-svc --accept-tos >/tmp/warp-svc-${id}.log 2>&1 &
     echo \$! > '$pf_svc'
   "
-  sleep 3
+  # 等 socket 出现或进程退出
+  local i
+  for i in 1 2 3 4 5 6 7 8; do
+    if _warp_svc_alive && { [ -S "${run}/warp_service" ] || [ -e "${run}/warp_service" ]; }; then
+      return 0
+    fi
+    if ! kill -0 "$(cat "$pf_svc" 2>/dev/null || echo 0)" 2>/dev/null; then
+      # 进程已死
+      return 1
+    fi
+    sleep 1
+  done
+  _warp_svc_alive
 }
 
 if ! _warp_svc_alive; then

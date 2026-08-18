@@ -42,10 +42,13 @@ if ip netns list 2>/dev/null | grep -qE "^${ns}[[:space:]]" || \
   ' 2>/dev/null || true
 fi
 
-# 关键：清 runtime unix socket，否则下次 start 报 Unix socket already bound
+# 关键：杀掉占用 runtime socket 的进程再删节点（残留会导致 already bound 秒退）
+if [ -e "${run}/warp_service" ] || [ -S "${run}/warp_service" ]; then
+  fuser -k "${run}/warp_service" 2>/dev/null || true
+  sleep 0.3
+fi
 rm -f "${run}/warp_service" 2>/dev/null || true
 if [ -d "$run" ]; then
-  # 只删 socket 节点，不动目录本身
   find "$run" -maxdepth 1 -type s -delete 2>/dev/null || true
 fi
 rm -f "$(instance_dbus_dir "$id")/system_bus_socket" 2>/dev/null || true
