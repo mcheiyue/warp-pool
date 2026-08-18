@@ -18,13 +18,24 @@ ensure_host_forward
 ensure_dirs "$id"
 ensure_netns "$id"
 
-if [ -f "$pf_svc" ]; then
-  old="$(cat "$pf_svc" || true)"
-  if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then
-    log "instance ${id}: warp-svc already running pid=${old}"
-  else
-    rm -f "$pf_svc"
+_warp_svc_alive() {
+  local p
+  p="$(cat "$pf_svc" 2>/dev/null || true)"
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+# 清残留 IPC，避免 "Unix socket already bound" 秒退
+_clean_warp_runtime() {
+  rm -f "${run}/warp_service" 2>/dev/null || true
+  if [ -d "$run" ]; then
+    find "$run" -maxdepth 1 -type s -delete 2>/dev/null || true
   fi
+}
+
+if _warp_svc_alive; then
+  log "instance ${id}: warp-svc already running pid=$(cat "$pf_svc")"
+else
+  rm -f "$pf_svc"
 fi
 
 # dbus in netns
@@ -38,8 +49,9 @@ if [ ! -S "$dbus_sock" ]; then
   sleep 1
 fi
 
-if [ ! -f "$pf_svc" ] || ! kill -0 "$(cat "$pf_svc" 2>/dev/null || echo 0)" 2>/dev/null; then
+_start_warp_svc_once() {
   log "instance ${id}: starting warp-svc in netns $(ns_name "$id")"
+  _clean_warp_runtime
   # write REAL warp-svc pid from inside ns (not ip-netns-exec wrapper)
   ns_exec "$id" bash -c "
     env STATE_DIRECTORY='$state' RUNTIME_DIRECTORY='$run' \
@@ -48,6 +60,33 @@ if [ ! -f "$pf_svc" ] || ! kill -0 "$(cat "$pf_svc" 2>/dev/null || echo 0)" 2>/d
     echo \$! > '$pf_svc'
   "
   sleep 3
+}
+
+if ! _warp_svc_alive; then
+  _start_warp_svc_once
+  # 秒退（socket 占坑等）：再 stop 清一次后重试
+  if ! _warp_svc_alive; then
+    log "instance ${id}: warp-svc died after start — clean runtime and retry"
+    tail -20 /tmp/warp-svc-"${id}".log 2>/dev/null || true
+    tail -20 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
+    bash "${SCRIPTS_DIR}/stop-instance.sh" "$id" || true
+    # stop 可能拆 dbus；重建
+    if [ ! -S "$dbus_sock" ]; then
+      ns_exec "$id" bash -c "
+        dbus-daemon --address='unix:path=${dbus_sock}' \
+          --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
+        echo \$! > '$pf_dbus'
+      "
+      sleep 1
+    fi
+    _start_warp_svc_once
+  fi
+  if ! _warp_svc_alive; then
+    err "instance ${id}: warp-svc failed to stay up"
+    tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
+    tail -40 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
+    exit 1
+  fi
 fi
 
 if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
@@ -138,4 +177,10 @@ if [ "${ENABLE_EXPOSE:-1}" = "1" ]; then
   disown $! 2>/dev/null || true
 fi
 
+if ! _warp_svc_alive; then
+  err "instance ${id}: warp-svc died before ready (socks up aborted)"
+  tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
+  tail -40 "${state}/cfwarp_service_log.txt" 2>/dev/null || true
+  exit 1
+fi
 log "instance ${id}: warp+socks up pid=$(cat "$pf_svc") socks=$(socks_addr "$id")"
