@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # One health pass: probe all instances via in-ns SOCKS, update meta + healthy.json
-# Only unique+healthy+pooled+alive enter backends (V4_UNIQUE=1)
-# v0.5.7: single-flight; collision_streak ≠ failures; auto-rotate cooldown
+# v0.5.7: single-flight; collision≠failures; auto-rotate AFTER lock release
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -11,12 +10,16 @@ COLLISION_THR="${COLLISION_ROTATE_THR:-3}"
 
 mkdir -p "${DATA_DIR}/state" "${PID_DIR}"
 
-# P1.1 single-flight
+# P1.1 single-flight — must NOT hold lock across rotate (minutes)
 exec 8>"${PID_DIR}/health-once.lock"
 if ! flock -n 8; then
   log "health-once already running — skip"
   exit 0
 fi
+
+# deferred work AFTER lock release (must not block single-flight)
+to_rotate=()
+to_start=()
 
 while read -r id; do
   [ -n "$id" ] || continue
@@ -69,9 +72,8 @@ while read -r id; do
     write_meta "$id" false "" "$failures" "$last_rotate" "" "" false
     meta_set_field "$id" collision_streak 0 2>/dev/null || true
     if [ "${SUPERVISE_RESTART:-1}" = "1" ]; then
-      bash "${SCRIPTS_DIR}/start-instance.sh" "$id" || true
+      to_start+=("$id")
     fi
-    # dead path: restart via start only — do NOT auto-rotate (avoids hard storm)
     continue
   fi
 
@@ -85,12 +87,7 @@ while read -r id; do
         log "instance ${id}: v4 collision ${ip} — collision_streak=${collision_streak}"
         if [ "$AUTO_ROTATE" = "1" ] && [ "$collision_streak" -ge "$COLLISION_THR" ]; then
           if auto_rotate_allowed "$id"; then
-            log "instance ${id}: v4 collision auto rotate (${ROTATE_MODE:-restart})"
-            if bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-restart}"; then
-              :
-            else
-              :
-            fi
+            to_rotate+=("${id}|${ROTATE_MODE:-restart}|collision")
           fi
         fi
       else
@@ -119,8 +116,7 @@ while read -r id; do
     log "instance ${id}: probe fail failures=${failures}"
     if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
       if auto_rotate_allowed "$id"; then
-        log "instance ${id}: probe-fail auto rotate (${ROTATE_MODE:-restart})"
-        bash "${SCRIPTS_DIR}/rotate-instance.sh" "$id" "${ROTATE_MODE:-restart}" || true
+        to_rotate+=("${id}|${ROTATE_MODE:-restart}|probe")
       fi
     fi
   fi
@@ -128,3 +124,31 @@ done < <(list_instance_ids)
 
 rebuild_healthy_json || true
 log "healthy.json updated: $(cat "${DATA_DIR}/state/healthy.json" 2>/dev/null || echo '{}')"
+
+# release single-flight BEFORE long start/rotate
+exec 8>&- || true
+
+for sid in "${to_start[@]+"${to_start[@]}"}"; do
+  [ -n "$sid" ] || continue
+  log "instance ${sid}: deferred start (was dead)"
+  bash "${SCRIPTS_DIR}/start-instance.sh" "$sid" || true
+done
+
+for item in "${to_rotate[@]+"${to_rotate[@]}"}"; do
+  [ -n "$item" ] || continue
+  rid="${item%%|*}"
+  rest="${item#*|}"
+  rmode="${rest%%|*}"
+  rwhy="${rest##*|}"
+  log "instance ${rid}: deferred auto rotate (${rmode}) why=${rwhy}"
+  bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" "$rmode" || true
+done
+
+# refresh backends after deferred starts (rotate does its own rebuild)
+if [ "${#to_start[@]:-0}" -gt 0 ]; then
+  # brief wait for socks
+  sleep 3
+  # one more probe pass without rotate recursion: just rebuild from current meta is weak;
+  # run a lock-free probe? keep simple — health-loop next tick will probe.
+  rebuild_healthy_json || true
+fi
