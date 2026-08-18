@@ -145,10 +145,7 @@ for item in "${to_rotate[@]+"${to_rotate[@]}"}"; do
 done
 
 # refresh backends after deferred starts (rotate does its own rebuild)
-if [ "${#to_start[@]:-0}" -gt 0 ]; then
-  # brief wait for socks
+if [ "${#to_start[@]}" -gt 0 ]; then
   sleep 3
-  # one more probe pass without rotate recursion: just rebuild from current meta is weak;
-  # run a lock-free probe? keep simple — health-loop next tick will probe.
   rebuild_healthy_json || true
 fi

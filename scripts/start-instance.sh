@@ -86,7 +86,7 @@ _start_warp_svc_once() {
 
 # P0.3: short critical section — only launch warp-svc
 (
-  flock -w 30 9 || {
+  flock -w 90 9 || {
     err "instance ${id}: start lock timeout"
     exit 1
   }
