@@ -479,13 +479,15 @@ list_instance_ids() {
   printf '%s\n' "${ids[@]}" | sort -n
 }
 
-# return 0 = conflict; 1 = unique or disabled
-# Counts peers that are healthy OR unique (seated), skipping pure drain shells.
-# Alive process with same v4 also conflicts (pkill-fallout: peers briefly unhealthy).
+# return 0 = conflict; 1 = free to claim
+# Only peers that ALREADY hold a seat claim block us:
+#   healthy==true OR unique==true (and not drain).
+# Alive-but-not-seated with same v4 must NOT block — otherwise 3 colliders
+# deadlock and nobody sits (first-writer-wins under unique lock).
 v4_conflicts() {
   local id="$1"
   local v4="$2"
-  local other_dir other_id other_meta other_healthy other_unique other_v4 other_ex other_pid pf
+  local other_dir other_id other_meta other_healthy other_unique other_v4 other_ex
   if [ "${V4_UNIQUE}" = "0" ]; then
     return 1
   fi
@@ -504,19 +506,11 @@ v4_conflicts() {
     other_v4="$(jq -r '.v4 // .ip // empty' "$other_meta" 2>/dev/null || true)"
     [ -n "$other_v4" ] && [ "$other_v4" = "$v4" ] || continue
     other_ex="$(jq -r '.exclude_reason // empty' "$other_meta" 2>/dev/null || true)"
-    # drain mid-rotate: not a seat holder
     [ "$other_ex" = "drain" ] && continue
     other_healthy="$(jq -r '.healthy // false' "$other_meta" 2>/dev/null || echo false)"
     other_unique="$(jq -r '.unique // false' "$other_meta" 2>/dev/null || echo false)"
     if [ "$other_healthy" = "true" ] || [ "$other_unique" = "true" ]; then
       return 0
-    fi
-    pf="$(pidfile_svc "$other_id")"
-    if [ -f "$pf" ]; then
-      other_pid="$(cat "$pf" 2>/dev/null || true)"
-      if [ -n "$other_pid" ] && kill -0 "$other_pid" 2>/dev/null; then
-        return 0
-      fi
     fi
   done
   return 1
