@@ -26,7 +26,11 @@ ROTATE_COOLDOWN_SEC="${ROTATE_COOLDOWN_SEC:-1800}"
 COLLISION_ROTATE_THR="${COLLISION_ROTATE_THR:-3}"
 # v0.6 seat + redraw
 REDRAW_MAX="${REDRAW_MAX:-2}"
-AUTO_REDRAW_ON_COLLISION="${AUTO_REDRAW_ON_COLLISION:-0}"
+# seat push: sequentially hard not_unique candidates (protect seated)
+SEAT_PUSH="${SEAT_PUSH:-1}"
+SEAT_PUSH_PER_PASS="${SEAT_PUSH_PER_PASS:-1}"
+# legacy alias — if set, treated as SEAT_PUSH
+AUTO_REDRAW_ON_COLLISION="${AUTO_REDRAW_ON_COLLISION:-}"
 # entrypoint: do not suicide whole container on transient all-dead
 SUPERVISE_EXIT_ON_ALL_DEAD="${SUPERVISE_EXIT_ON_ALL_DEAD:-0}"
 # default rotate mode (chen redraw)

@@ -84,6 +84,11 @@ _start_warp_svc_once() {
   _warp_svc_alive
 }
 
+# clear abandoned start lock file if no start-instance for this id
+if [ -f "${PID_DIR}/start-${id}.lock" ] && ! pgrep -f "start-instance.sh ${id}" >/dev/null 2>&1; then
+  rm -f "${PID_DIR}/start-${id}.lock" 2>/dev/null || true
+fi
+
 # P0.3: short critical section — only launch warp-svc
 (
   flock -w 90 9 || {

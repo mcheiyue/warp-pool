@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# health-once v0.6: seat grant/deny; protect seated; no collision auto-kick
+# health-once v0.6.1: seat grant/deny; protect seated; sequential seat-push hard
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 FAILURES_THR="${HEALTH_FAILURES:-3}"
 AUTO_ROTATE="${HEALTH_AUTO_ROTATE:-0}"
-AUTO_REDRAW="${AUTO_REDRAW_ON_COLLISION:-0}"
+# SEAT_PUSH default on; AUTO_REDRAW_ON_COLLISION overrides if explicitly set
+if [ -n "${AUTO_REDRAW_ON_COLLISION:-}" ]; then
+  SEAT_PUSH="${AUTO_REDRAW_ON_COLLISION}"
+fi
+SEAT_PUSH="${SEAT_PUSH:-1}"
+SEAT_PUSH_PER_PASS="${SEAT_PUSH_PER_PASS:-1}"
 
 mkdir -p "${DATA_DIR}/state" "${PID_DIR}"
 
@@ -16,7 +21,8 @@ if ! flock -n 8; then
 fi
 
 to_start=()
-to_redraw=()
+# candidates for seat-push (id list, ordered)
+candidates=()
 
 while read -r id; do
   [ -n "$id" ] || continue
@@ -79,15 +85,12 @@ while read -r id; do
       if v4_conflicts "$id" "$ip"; then
         release_unique_lock
         collision_streak=$((collision_streak + 1))
-        # deny seat; keep process; NEVER rotate an already-seated peer
         write_meta "$id" false "$ip" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
         meta_set_field "$id" collision_streak "$collision_streak" 2>/dev/null || true
         log "seat deny id=${id} ip=${ip} reason=v4_collision streak=${collision_streak}"
-        # optional: redraw only THIS candidate if not already seated and switch on
-        if [ "$AUTO_REDRAW" = "1" ] && ! is_seated "$id"; then
-          if auto_rotate_allowed "$id"; then
-            to_redraw+=("$id")
-          fi
+        # queue for sequential seat-push (never seated peers)
+        if is_pool_eligible "$id" && ! is_seated "$id"; then
+          candidates+=("$id")
         fi
       else
         if [ -n "$ip" ] && [ -n "$prev_v4" ] && [ "$ip" != "$prev_v4" ]; then
@@ -113,10 +116,9 @@ while read -r id; do
     failures=$((failures + 1))
     write_meta "$id" false "" "$failures" "$last_rotate" "$(cat "$pidfile")" "" false
     log "instance ${id}: probe fail failures=${failures}"
-    # probe fail: only start-level recovery via AUTO_ROTATE (legacy) — prefer start not hard
     if [ "$AUTO_ROTATE" = "1" ] && [ "$failures" -ge "$FAILURES_THR" ]; then
       if auto_rotate_allowed "$id" && ! is_seated "$id"; then
-        to_redraw+=("$id")
+        candidates+=("$id")
       fi
     fi
   fi
@@ -130,21 +132,47 @@ exec 8>&- || true
 for sid in "${to_start[@]+"${to_start[@]}"}"; do
   [ -n "$sid" ] || continue
   log "instance ${sid}: deferred start (was dead)"
+  # clear stale start lock if no holder
+  rm -f "${PID_DIR}/start-${sid}.lock" 2>/dev/null || true
   bash "${SCRIPTS_DIR}/start-instance.sh" "$sid" || true
 done
 
-# candidate redraw only (hard); never touches seated peers inside rotate of self
-for rid in "${to_redraw[@]+"${to_redraw[@]}"}"; do
-  [ -n "$rid" ] || continue
-  if is_seated "$rid"; then
-    log "instance ${rid}: skip redraw — already seated (protect)"
-    continue
-  fi
-  log "instance ${rid}: deferred candidate redraw (hard)"
-  bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" hard || true
-done
+# v0.6.1: 逐一 seat-push — hard only candidates, never seated, max SEAT_PUSH_PER_PASS per tick
+if [ "$SEAT_PUSH" = "1" ]; then
+  pushed=0
+  for rid in "${candidates[@]+"${candidates[@]}"}"; do
+    [ -n "$rid" ] || continue
+    if [ "$pushed" -ge "$SEAT_PUSH_PER_PASS" ]; then
+      log "seat-push: budget ${SEAT_PUSH_PER_PASS}/pass reached — rest next tick"
+      break
+    fi
+    if is_seated "$rid"; then
+      log "seat-push skip id=${rid} — already seated (protect)"
+      continue
+    fi
+    if ! is_pool_eligible "$rid"; then
+      continue
+    fi
+    if ! auto_rotate_allowed "$rid"; then
+      log "seat-push skip id=${rid} — cooldown"
+      continue
+    fi
+    if has_active_rotate_lock "$rid"; then
+      continue
+    fi
+    log "seat-push id=${rid} hard redraw (逐一互异, protect seats)"
+    # bypass ROTATE_COOLDOWN for seat-push? keep cooldown via auto_rotate_allowed only
+    # temporarily lower cooldown check is already in auto_rotate_allowed
+    if ROTATE_COOLDOWN=0 bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" hard; then
+      log "seat-push id=${rid} ok"
+    else
+      log "seat-push id=${rid} fail — seat deny remains, seats untouched"
+    fi
+    pushed=$((pushed + 1))
+  done
+fi
 
-if [ "${#to_start[@]}" -gt 0 ] || [ "${#to_redraw[@]}" -gt 0 ]; then
+if [ "${#to_start[@]}" -gt 0 ] || [ "${pushed:-0}" -gt 0 ]; then
   sleep 2
   rebuild_healthy_json || true
 fi
