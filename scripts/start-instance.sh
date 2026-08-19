@@ -53,7 +53,9 @@ _clean_warp_runtime() {
 _ensure_dbus() {
   if [ ! -S "$dbus_sock" ]; then
     rm -f "${dbus_dir}/pid" 2>/dev/null || true
+    # close lock fds so dbus never inherits flock
     ns_exec "$id" bash -c "
+      exec 8>&- 9>&- 7>&- 2>/dev/null || true
       dbus-daemon --address='unix:path=${dbus_sock}' \
         --config-file=/usr/share/dbus-1/system.conf --nopidfile --nofork &
       echo \$! > '$pf_dbus'
@@ -86,27 +88,37 @@ _start_warp_svc_once() {
   _warp_svc_alive
 }
 
-# clear abandoned per-id lock if no start-instance for this id
-if [ -f "${PID_DIR}/start-${id}.lock" ] && ! pgrep -f "start-instance.sh ${id}( |$)" >/dev/null 2>&1; then
-  rm -f "${PID_DIR}/start-${id}.lock" 2>/dev/null || true
-fi
-# global+per-id lock ONLY around warp-svc launch (not register/connect).
-# flock must not outlive this subshell — warp-svc must not inherit the fd.
+# global start queue via mkdir+pid (no fd inheritance to warp-svc/dbus)
 mkdir -p "${PID_DIR}"
-START_GLOBAL_WAIT="${START_GLOBAL_WAIT:-180}"
-if ! (
-  flock -w "${START_GLOBAL_WAIT}" 9 || {
+START_GLOBAL_WAIT="${START_GLOBAL_WAIT:-120}"
+_g_lock="${PID_DIR}/start-global.lock.dir"
+_got_g=0
+_t=0
+while ! mkdir "$_g_lock" 2>/dev/null; do
+  sleep 1
+  _t=$((_t + 1))
+  if [ "$_t" -ge "$START_GLOBAL_WAIT" ]; then
     log "instance ${id}: start deferred (global lock busy ${START_GLOBAL_WAIT}s)"
     exit 1
-  }
-  flock -w 30 8 || {
-    log "instance ${id}: start deferred (per-id lock busy)"
-    exit 1
-  }
-  if _warp_svc_alive; then
-    log "instance ${id}: warp-svc already running pid=$(cat "$pf_svc")"
-    exit 0
   fi
+  # stale: holder pid dead
+  _hp="$(cat "${_g_lock}/pid" 2>/dev/null || true)"
+  if [ -n "$_hp" ] && ! kill -0 "$_hp" 2>/dev/null; then
+    log "instance ${id}: clearing stale global start lock (pid=${_hp})"
+    rm -rf "$_g_lock" 2>/dev/null || true
+  elif [ -z "$_hp" ] && [ "$_t" -ge 15 ]; then
+    # empty lock dir left behind
+    rm -rf "$_g_lock" 2>/dev/null || true
+  fi
+done
+echo $$ >"${_g_lock}/pid" 2>/dev/null || true
+_got_g=1
+# shellcheck disable=SC2064
+trap 'if [ "${_got_g:-0}" = 1 ]; then rm -rf "'"${_g_lock}"'" 2>/dev/null || true; fi' EXIT
+
+if _warp_svc_alive; then
+  log "instance ${id}: warp-svc already running pid=$(cat "$pf_svc")"
+else
   rm -f "$pf_svc"
   _ensure_dbus
   _start_warp_svc_once
@@ -122,16 +134,18 @@ if ! (
     tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
     exit 1
   fi
-) 8>"${PID_DIR}/start-${id}.lock" 9>"${PID_DIR}/start-global.lock"; then
-  exit 1
 fi
+# release global lock before long register/connect
+rm -rf "$_g_lock" 2>/dev/null || true
+_got_g=0
+trap - EXIT
 
 if ! _warp_svc_alive; then
   err "instance ${id}: warp-svc not alive after start section"
   exit 1
 fi
 
-# --- locks released: register / connect / socks (long path, parallel-safe per id) ---
+# --- global lock released: register / connect / socks ---
 
 if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
   log "instance ${id}: daemon not Connected yet (continue register/connect)"
