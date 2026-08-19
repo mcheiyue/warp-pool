@@ -65,7 +65,9 @@ _ensure_dbus() {
 _start_warp_svc_once() {
   log "instance ${id}: starting warp-svc in netns $(ns_name "$id")"
   _clean_warp_runtime
+  # close lock fds before daemonize — else warp-svc inherits flock and blocks all starts
   ns_exec "$id" bash -c "
+    exec 8>&- 9>&- 7>&- 2>/dev/null || true
     env STATE_DIRECTORY='$state' RUNTIME_DIRECTORY='$run' \
       DBUS_SYSTEM_BUS_ADDRESS='unix:path=${dbus_sock}' \
       warp-svc --accept-tos >/tmp/warp-svc-${id}.log 2>&1 &
@@ -88,16 +90,15 @@ _start_warp_svc_once() {
 if [ -f "${PID_DIR}/start-${id}.lock" ] && ! pgrep -f "start-instance.sh ${id}( |$)" >/dev/null 2>&1; then
   rm -f "${PID_DIR}/start-${id}.lock" 2>/dev/null || true
 fi
-# global start queue: only one start-instance at a time (boot/supervise/health 不互抢)
+# global+per-id lock ONLY around warp-svc launch (not register/connect).
+# flock must not outlive this subshell — warp-svc must not inherit the fd.
 mkdir -p "${PID_DIR}"
 START_GLOBAL_WAIT="${START_GLOBAL_WAIT:-180}"
-exec 9>"${PID_DIR}/start-global.lock"
-if ! flock -w "${START_GLOBAL_WAIT}" 9; then
-  log "instance ${id}: start deferred (global lock busy ${START_GLOBAL_WAIT}s)"
-  exit 1
-fi
-# per-id lock; fd 9 held until script exit (covers register/connect too)
 if ! (
+  flock -w "${START_GLOBAL_WAIT}" 9 || {
+    log "instance ${id}: start deferred (global lock busy ${START_GLOBAL_WAIT}s)"
+    exit 1
+  }
   flock -w 30 8 || {
     log "instance ${id}: start deferred (per-id lock busy)"
     exit 1
@@ -121,7 +122,7 @@ if ! (
     tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
     exit 1
   fi
-) 8>"${PID_DIR}/start-${id}.lock"; then
+) 8>"${PID_DIR}/start-${id}.lock" 9>"${PID_DIR}/start-global.lock"; then
   exit 1
 fi
 
@@ -130,7 +131,7 @@ if ! _warp_svc_alive; then
   exit 1
 fi
 
-# --- lock released: register / connect / socks (long path) ---
+# --- locks released: register / connect / socks (long path, parallel-safe per id) ---
 
 if ! wait_daemon_ready "$id" "$WARP_CONNECT_TIMEOUT"; then
   log "instance ${id}: daemon not Connected yet (continue register/connect)"
