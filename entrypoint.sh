@@ -240,10 +240,10 @@ else
   log "boot: starting ${#BOOT_IDS[@]} instance(s): ${BOOT_IDS[*]:-none}"
 fi
 
-# 先启动控制面，再 boot 实例（即使实例 boot/探测卡住，控制面与 UI 也保持在线）
+# control + aggregate early (UI/API 在线)；health-loop 等 boot 完再启，避免与 boot 抢 start
 _launch_control
-_launch_health_loop
 _launch_aggregate
+export WARP_BOOTING=1
 
 started=0
 boot_idx=0
@@ -259,9 +259,7 @@ for id in "${BOOT_IDS[@]}"; do
   fi
   boot_idx=$((boot_idx + 1))
 
-  # rotate 残骸 drain 先自愈，再判断是否 boot skip
   heal_stale_rotate_drain "$id" || true
-  # 出池休眠：启动时不拉起 unpooled 实例（manual/guard 仍 skip）
   if [ "${PARK_ON_UNPOOL}" = "1" ] && [ -f "$(instance_dir "$id")/meta.json" ]; then
     if ! is_pool_eligible "$id"; then
       log "instance ${id}: boot skip (not pooled, PARK_ON_UNPOOL=1)"
@@ -269,19 +267,20 @@ for id in "${BOOT_IDS[@]}"; do
     fi
   fi
 
-  # v0.6: start only — one-shot seat try, NO unique thrash (禁互踢)
+  # 串行 boot：同时只起一个（全局 start 锁在 start-instance 内）
   if bash "${SCRIPTS_DIR}/ensure-instance.sh" "$id" && bash "${SCRIPTS_DIR}/start-instance.sh" "$id"; then
     started=$((started + 1))
     probed=0
     for ((t = 0; t < BOOT_HEALTH_WAIT; t += 3)); do
-      if probe_instance "$id" >/dev/null; then
+      if probe_instance "$id" >/dev/null 2>&1; then
         probed=1
         break
       fi
       sleep 3
     done
     if [ "$probed" = "1" ]; then
-      if ip="$(ensure_instance_unique "$id")"; then
+      # ensure_instance_unique: log→stderr, IP→stdout only
+      if ip="$(ensure_instance_unique "$id" 2>/dev/null)"; then
         log "instance ${id}: boot seat grant v4=${ip}"
       else
         log "instance ${id}: boot alive but not seated (v4 collision or busy) — keep running"
@@ -303,11 +302,12 @@ if [ "$started" -lt 1 ]; then
 fi
 
 log "started ${started}/${#BOOT_IDS[@]} boot instance(s) (desired=$(_read_desired_n))"
-# one seat pass after all boots (no thrash)
+unset WARP_BOOTING
+export WARP_BOOTING=0
+# boot 完成后再 health-loop，避免并行 start lock timeout
+_launch_health_loop
 SUPERVISE_RESTART=0 bash "${SCRIPTS_DIR}/health-once.sh" || true
 rebuild_healthy_json || true
-
-
 
 log "supervising..."
 while true; do

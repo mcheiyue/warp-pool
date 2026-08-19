@@ -163,7 +163,7 @@ rotate_one() {
   fi
 
   if _commit_seat "$id" "$_ROTATE_IP" "$ts" "rotate:${MODE}"; then
-    log "instance ${id}: rotate ok mode=${MODE} v4=${_ROTATE_IP} seat attempts=${attempts}"
+    log "rotate summary id=${id} ok mode=${MODE} ${baseline_ip:-none}→${_ROTATE_IP} attempts=${attempts}"
     mark_rotate_success "$id"
     rebuild_healthy_json || true
     return 0
@@ -182,7 +182,7 @@ rotate_one() {
       continue
     fi
     if _commit_seat "$id" "$_ROTATE_IP" "$ts" "rotate:hard"; then
-      log "instance ${id}: rotate ok mode=hard v4=${_ROTATE_IP} seat attempts=${attempts}"
+      log "rotate summary id=${id} ok mode=hard ${baseline_ip:-none}→${_ROTATE_IP} attempts=${attempts}"
       mark_rotate_success "$id"
       rebuild_healthy_json || true
       return 0
@@ -192,7 +192,7 @@ rotate_one() {
 
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   write_meta "$id" false "${_ROTATE_IP:-}" 1 "$ts" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" false
-  err "instance ${id}: seat deny after redraw v4=${_ROTATE_IP:-} attempts=${attempts}"
+  log "rotate summary id=${id} fail mode=hard ${baseline_ip:-none}→${_ROTATE_IP:-none} attempts=${attempts}"
   mark_rotate_fail "$id"
   rebuild_healthy_json || true
   return 1

@@ -84,15 +84,22 @@ _start_warp_svc_once() {
   _warp_svc_alive
 }
 
-# clear abandoned start lock file if no start-instance for this id
-if [ -f "${PID_DIR}/start-${id}.lock" ] && ! pgrep -f "start-instance.sh ${id}" >/dev/null 2>&1; then
+# clear abandoned per-id lock if no start-instance for this id
+if [ -f "${PID_DIR}/start-${id}.lock" ] && ! pgrep -f "start-instance.sh ${id}( |$)" >/dev/null 2>&1; then
   rm -f "${PID_DIR}/start-${id}.lock" 2>/dev/null || true
 fi
-
-# P0.3: short critical section — only launch warp-svc
-(
-  flock -w 90 9 || {
-    err "instance ${id}: start lock timeout"
+# global start queue: only one start-instance at a time (boot/supervise/health 不互抢)
+mkdir -p "${PID_DIR}"
+START_GLOBAL_WAIT="${START_GLOBAL_WAIT:-180}"
+exec 9>"${PID_DIR}/start-global.lock"
+if ! flock -w "${START_GLOBAL_WAIT}" 9; then
+  log "instance ${id}: start deferred (global lock busy ${START_GLOBAL_WAIT}s)"
+  exit 1
+fi
+# per-id lock; fd 9 held until script exit (covers register/connect too)
+if ! (
+  flock -w 30 8 || {
+    log "instance ${id}: start deferred (per-id lock busy)"
     exit 1
   }
   if _warp_svc_alive; then
@@ -114,7 +121,9 @@ fi
     tail -40 /tmp/warp-svc-"${id}".log 2>/dev/null || true
     exit 1
   fi
-) 9>"${PID_DIR}/start-${id}.lock"
+) 8>"${PID_DIR}/start-${id}.lock"; then
+  exit 1
+fi
 
 if ! _warp_svc_alive; then
   err "instance ${id}: warp-svc not alive after start section"

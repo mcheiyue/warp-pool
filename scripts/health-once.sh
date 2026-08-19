@@ -137,39 +137,61 @@ for sid in "${to_start[@]+"${to_start[@]}"}"; do
   bash "${SCRIPTS_DIR}/start-instance.sh" "$sid" || true
 done
 
-# v0.6.1: 逐一 seat-push — hard only candidates, never seated, max SEAT_PUSH_PER_PASS per tick
+# ⑤ 全座：eligible 均已入座则不再 hard
+_all_eligible_seated=1
+_eligible_n=0
+_seated_n=0
+while read -r _eid; do
+  [ -n "$_eid" ] || continue
+  is_pool_eligible "$_eid" || continue
+  pf="$(pidfile_svc "$_eid")"
+  [ -f "$pf" ] && kill -0 "$(cat "$pf" 2>/dev/null || true)" 2>/dev/null || continue
+  _eligible_n=$((_eligible_n + 1))
+  if is_seated "$_eid"; then
+    _seated_n=$((_seated_n + 1))
+  else
+    _all_eligible_seated=0
+  fi
+done < <(list_instance_ids)
+
+# v0.6.1: seat-push — hard only candidates; skip when all seated
 if [ "$SEAT_PUSH" = "1" ]; then
-  pushed=0
-  for rid in "${candidates[@]+"${candidates[@]}"}"; do
-    [ -n "$rid" ] || continue
-    if [ "$pushed" -ge "$SEAT_PUSH_PER_PASS" ]; then
-      log "seat-push: budget ${SEAT_PUSH_PER_PASS}/pass reached — rest next tick"
-      break
-    fi
-    if is_seated "$rid"; then
-      log "seat-push skip id=${rid} — already seated (protect)"
-      continue
-    fi
-    if ! is_pool_eligible "$rid"; then
-      continue
-    fi
-    if ! auto_rotate_allowed "$rid"; then
-      log "seat-push skip id=${rid} — cooldown"
-      continue
-    fi
-    if has_active_rotate_lock "$rid"; then
-      continue
-    fi
-    log "seat-push id=${rid} hard redraw (逐一互异, protect seats)"
-    # bypass ROTATE_COOLDOWN for seat-push? keep cooldown via auto_rotate_allowed only
-    # temporarily lower cooldown check is already in auto_rotate_allowed
-    if ROTATE_COOLDOWN=0 bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" hard; then
-      log "seat-push id=${rid} ok"
-    else
-      log "seat-push id=${rid} fail — seat deny remains, seats untouched"
-    fi
-    pushed=$((pushed + 1))
-  done
+  if [ "$_eligible_n" -gt 0 ] && [ "$_all_eligible_seated" = "1" ]; then
+    log_throttled "seat-push-full" 300 \
+      "seat-push skip — all eligible seated (${_seated_n}/${_eligible_n})"
+  elif [ "${#candidates[@]}" -eq 0 ]; then
+    :
+  else
+    pushed=0
+    for rid in "${candidates[@]+"${candidates[@]}"}"; do
+      [ -n "$rid" ] || continue
+      if [ "$pushed" -ge "$SEAT_PUSH_PER_PASS" ]; then
+        log "seat-push: budget ${SEAT_PUSH_PER_PASS}/pass reached — rest next tick"
+        break
+      fi
+      if is_seated "$rid"; then
+        log "seat-push skip id=${rid} — already seated (protect)"
+        continue
+      fi
+      if ! is_pool_eligible "$rid"; then
+        continue
+      fi
+      if ! auto_rotate_allowed "$rid"; then
+        log "seat-push skip id=${rid} — cooldown"
+        continue
+      fi
+      if has_active_rotate_lock "$rid"; then
+        continue
+      fi
+      log "seat-push id=${rid} hard redraw (protect seats)"
+      if ROTATE_COOLDOWN=0 bash "${SCRIPTS_DIR}/rotate-instance.sh" "$rid" hard; then
+        log "seat-push id=${rid} ok"
+      else
+        log "seat-push id=${rid} fail — seat deny remains, seats untouched"
+      fi
+      pushed=$((pushed + 1))
+    done
+  fi
 fi
 
 if [ "${#to_start[@]}" -gt 0 ] || [ "${pushed:-0}" -gt 0 ]; then

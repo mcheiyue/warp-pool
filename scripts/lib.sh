@@ -36,7 +36,8 @@ SUPERVISE_EXIT_ON_ALL_DEAD="${SUPERVISE_EXIT_ON_ALL_DEAD:-0}"
 # default rotate mode (chen redraw)
 ROTATE_MODE="${ROTATE_MODE:-hard}"
 
-log() { echo "==> [warp-pool] $*"; }
+# MUST go to stderr — many callers capture stdout (ip="$(ensure_instance_unique)")
+log() { echo "==> [warp-pool] $*" >&2; }
 err() { echo "==> [warp-pool][ERROR] $*" >&2; }
 
 # append timestamped line to ${DATA_DIR}/logs/warp-pool.log
@@ -591,7 +592,7 @@ ensure_instance_unique() {
   if [ "${V4_UNIQUE}" = "0" ]; then
     if ip="$(probe_instance "$id")"; then
       write_meta "$id" true "$ip" 0 "" "$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)" "" true
-      echo "$ip"
+      printf '%s\n' "$ip"
       return 0
     fi
     return 1
@@ -602,7 +603,8 @@ ensure_instance_unique() {
   pid="$(cat "$(pidfile_svc "$id")" 2>/dev/null || true)"
   if commit_if_unique "$id" "$ip" 0 "" "$pid"; then
     log "seat grant id=${id} ip=${ip}"
-    echo "$ip"
+    # stdout: IP only (for capture); message already on stderr via log
+    printf '%s\n' "$ip"
     return 0
   fi
   write_meta "$id" false "$ip" 0 "" "$pid" "" false
