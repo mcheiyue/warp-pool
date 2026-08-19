@@ -36,6 +36,9 @@ services:
       HEALTH_TIMEOUT: "${HEALTH_TIMEOUT:-15}"
       HEALTH_FAILURES: "${HEALTH_FAILURES:-3}"
       ROTATE_COOLDOWN: "${ROTATE_COOLDOWN:-300}"
+      # seat-push 连败熔断（脚本读这两个，必须透传）
+      ROTATE_COOLDOWN_SEC: "${ROTATE_COOLDOWN_SEC:-600}"
+      ROTATE_FAIL_STREAK_MAX: "${ROTATE_FAIL_STREAK_MAX:-4}"
       ROTATE_MODE: "${ROTATE_MODE:-hard}"
       REGISTER_STAGGER: "${REGISTER_STAGGER:-5}"
       REGISTER_JITTER_MAX: "${REGISTER_JITTER_MAX:-8}"
@@ -49,7 +52,7 @@ services:
       ENABLE_HEALTH: "${ENABLE_HEALTH:-1}"
       HEALTH_AUTO_ROTATE: "${HEALTH_AUTO_ROTATE:-0}"
       SEAT_PUSH: "${SEAT_PUSH:-1}"
-      SEAT_PUSH_PER_PASS: "${SEAT_PUSH_PER_PASS:-1}"
+      SEAT_PUSH_PER_PASS: "${SEAT_PUSH_PER_PASS:-2}"
       REDRAW_MAX: "${REDRAW_MAX:-2}"
       SUPERVISE_EXIT_ON_ALL_DEAD: "${SUPERVISE_EXIT_ON_ALL_DEAD:-0}"
       WEB_ROOT: "${WEB_ROOT:-/opt/warp-pool/web}"
@@ -64,8 +67,8 @@ services:
     networks:
       - default
       - cpa_default
-    # N=5 × ~110MiB warp-svc needs >512m; default 1536m
-    mem_limit: ${MEM_LIMIT:-1536m}
+    # N=5 稳态 ~100–400MiB；默认 1024m 给宿主机留余量
+    mem_limit: ${MEM_LIMIT:-1024m}
 
 volumes:
   warp-pool-data:
