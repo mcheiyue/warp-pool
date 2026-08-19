@@ -120,15 +120,21 @@ rotate_one() {
 
   local baseline_ip="$old_ip"
 
-  # commit if unique vs other seats; same baseline OK when unique
+  # commit if unique vs other seats.
+  # hard redraw: same baseline never auto-ok (was false-unique when pkill killed peers).
+  # restart mode: same IP OK only if truly unique among living/seated peers.
   _commit_seat() {
     local cid="$1" cip="$2" cts="$3" creason="$4"
     if [ -n "$baseline_ip" ] && [ "$cip" = "$baseline_ip" ]; then
+      if [ "$MODE" = "hard" ] || [ "${attempts:-0}" -gt 1 ]; then
+        log "instance ${cid}: hard/retry still same v4 ${cip} — fail (need new egress)"
+        return 1
+      fi
       if v4_conflicts "$cid" "$cip"; then
         log "instance ${cid}: same v4 ${cip} + pool conflict — fail"
         return 1
       fi
-      log "instance ${cid}: same v4 ${cip} but unique — accept (redraw sticky)"
+      log "instance ${cid}: restart same v4 ${cip} unique — accept"
       creason="${creason}:same-ip-ok"
     fi
     if [ "${V4_UNIQUE}" = "0" ]; then

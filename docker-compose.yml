@@ -64,7 +64,8 @@ services:
     networks:
       - default
       - cpa_default
-    mem_limit: ${MEM_LIMIT:-512m}
+    # N=5 × ~110MiB warp-svc needs >512m; default 1536m
+    mem_limit: ${MEM_LIMIT:-1536m}
 
 volumes:
   warp-pool-data:

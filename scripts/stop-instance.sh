@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# stop-instance.sh <id> [keep-netns]
-# Stops expose/gost/warp-svc/dbus. Keeps netns+STATE by default (for rotate restart).
-# Always clears RUNTIME_DIRECTORY unix sockets so next warp-svc can bind.
+# stop-instance.sh <id> [drop-netns]
+# Stops expose/gost/warp-svc/dbus for ONE instance only.
+# NEVER pkill -x by name: netns does not isolate the PID table — that kills ALL peers.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
@@ -10,19 +10,65 @@ drop_ns="${2:-}"
 run="$(instance_run_dir "$id")"
 ns="$(ns_name "$id")"
 
+_kill_pid() {
+  local pid="$1" label="$2"
+  [ -n "$pid" ] || return 0
+  # only numeric pids
+  case "$pid" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  if kill -0 "$pid" 2>/dev/null; then
+    log "instance ${id}: stop ${label} pid=${pid}"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
 _kill_pidfile() {
   local pf="$1" label="$2"
   if [ -f "$pf" ]; then
     local pid
-    pid="$(cat "$pf" || true)"
-    if [ -n "$pid" ]; then
-      log "instance ${id}: stop ${label} pid=${pid}"
-      kill "$pid" 2>/dev/null || true
-      sleep 1
-      kill -9 "$pid" 2>/dev/null || true
-    fi
+    pid="$(cat "$pf" 2>/dev/null || true)"
+    _kill_pid "$pid" "$label"
     rm -f "$pf"
   fi
+}
+
+# Kill processes whose /proc/PID/ns/net matches this netns (safe residual cleanup).
+# Does NOT use pkill -x (would slaughter every warp-svc in the container).
+_kill_in_netns_by_comm() {
+  local comm="$1"
+  local ns_path nino p pns pcomm
+  ns_path="/var/run/netns/${ns}"
+  [ -e "$ns_path" ] || ns_path="/run/netns/${ns}"
+  [ -e "$ns_path" ] || return 0
+  nino="$(stat -c %i "$ns_path" 2>/dev/null || true)"
+  [ -n "$nino" ] || return 0
+
+  # prefer ip netns pids if available
+  if command -v ip >/dev/null 2>&1; then
+    local pids
+    pids="$(ip netns pids "$ns" 2>/dev/null || true)"
+    for p in $pids; do
+      pcomm="$(cat "/proc/$p/comm" 2>/dev/null || true)"
+      if [ "$pcomm" = "$comm" ]; then
+        _kill_pid "$p" "${comm}(ns)"
+      fi
+    done
+    return 0
+  fi
+
+  # fallback: scan /proc for matching net ns inode + comm
+  for p in /proc/[0-9]*; do
+    p="${p#/proc/}"
+    pns="$(stat -c %i "/proc/$p/ns/net" 2>/dev/null || true)"
+    [ "$pns" = "$nino" ] || continue
+    pcomm="$(cat "/proc/$p/comm" 2>/dev/null || true)"
+    if [ "$pcomm" = "$comm" ]; then
+      _kill_pid "$p" "${comm}(ns-scan)"
+    fi
+  done
 }
 
 _kill_pidfile "$(pidfile_expose "$id")" "expose"
@@ -30,19 +76,12 @@ _kill_pidfile "$(pidfile_gost "$id")" "gost"
 _kill_pidfile "$(pidfile_svc "$id")" "warp-svc"
 _kill_pidfile "$(pidfile_dbus "$id")" "dbus"
 
-# netns 内可能残留未写进 pidfile 的 warp-svc（抢 /run/warp-N/warp_service）
-if ip netns list 2>/dev/null | grep -qE "^${ns}[[:space:]]" || \
-   [ -e "/var/run/netns/${ns}" ] || [ -e "/run/netns/${ns}" ]; then
-  ns_exec "$id" bash -c '
-    pkill -x warp-svc 2>/dev/null || true
-    pkill -x microsocks 2>/dev/null || true
-    sleep 0.5
-    pkill -9 -x warp-svc 2>/dev/null || true
-    pkill -9 -x microsocks 2>/dev/null || true
-  ' 2>/dev/null || true
-fi
+# residual in this netns only
+_kill_in_netns_by_comm "warp-svc"
+_kill_in_netns_by_comm "microsocks"
+_kill_in_netns_by_comm "gost"
 
-# 关键：杀掉占用 runtime socket 的进程再删节点（残留会导致 already bound 秒退）
+# socket holders for THIS runtime dir only (path is per-id)
 if [ -e "${run}/warp_service" ] || [ -S "${run}/warp_service" ]; then
   fuser -k "${run}/warp_service" 2>/dev/null || true
   sleep 0.3
